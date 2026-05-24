@@ -34,12 +34,19 @@ use crate::StorageError;
 /// domain types happens in `row_to_inbox_item`.
 #[derive(sqlx::FromRow)]
 struct InboxItemRow {
+    // UUID v7 as hyphenated TEXT; matches the InboxItemId::to_string() format.
     id: String,
+    // Verbatim captured text — never modified on read.
     raw_text: String,
+    // UUID of the capturing member, hyphenated TEXT.
     captured_by: String,
+    // RFC 3339 timestamp string, e.g. "2026-05-25T10:00:00Z".
     captured_at: String,
+    // snake_case variant name (e.g. "touch", "voice") — see InboxSource::Display.
     source: String,
+    // snake_case triage state (e.g. "untriaged", "typed") — see TriageState::Display.
     triage_state: String,
+    // NULL when untriaged; "entity_type:uuid" when the item has been typed.
     triaged_to: Option<String>,
 }
 
@@ -55,8 +62,9 @@ struct InboxItemRow {
 /// Returns `StorageError::Database` on any sqlx failure (constraint violation,
 /// I/O error, pool exhaustion).
 pub async fn insert_inbox_item(pool: &SqlitePool, item: &InboxItem) -> Result<(), StorageError> {
-    // Serialise the domain types to their TEXT representations for storage.
+    // Convert each domain type to its TEXT representation for the SQL bind.
     let id = item.id.to_string();
+    // MemberId implements Display as a hyphenated UUID string.
     let captured_by = item.captured_by.to_string();
     // RFC 3339 is a profile of ISO-8601 that SQLite's text affinity sorts
     // correctly because it uses a fixed-width format with Z or ±HH:MM offset.
@@ -64,11 +72,15 @@ pub async fn insert_inbox_item(pool: &SqlitePool, item: &InboxItem) -> Result<()
         .captured_at
         .format(&Rfc3339)
         .map_err(|e| StorageError::Parse(e.to_string()))?;
+    // InboxSource::Display produces the snake_case storage string (see inbox.rs).
     let source = item.source.to_string();
+    // TriageState::Display produces the snake_case storage string.
     let triage_state = item.triage_state.to_string();
     // triaged_to is NULL when absent — straightforward Option→NULL mapping.
     let triaged_to = item.triaged_to.as_ref().map(|r| r.0.clone());
 
+    // Positional bind parameters (?1..?7) map to the VALUES list in order.
+    // Named parameters are not used here to keep the query portable.
     sqlx::query(
         "
         INSERT INTO inbox_items
@@ -78,15 +90,21 @@ pub async fn insert_inbox_item(pool: &SqlitePool, item: &InboxItem) -> Result<()
         ",
     )
     .bind(id)
+    // raw_text is bound as a reference — no copy needed; sqlx borrows the String.
     .bind(&item.raw_text)
+    // captured_by, captured_at in bind order.
     .bind(captured_by)
     .bind(captured_at)
+    // source and triage_state are snake_case strings from Display.
     .bind(source)
     .bind(triage_state)
+    // triaged_to is None→NULL or Some(String)→TEXT in SQLite.
     .bind(triaged_to)
+    // `.execute` runs the INSERT without returning rows.
     .execute(pool)
     .await?;
 
+    // Return unit on success. The caller already has the full InboxItem struct.
     Ok(())
 }
 
@@ -105,8 +123,10 @@ pub async fn fetch_inbox_item(
     pool: &SqlitePool,
     id: InboxItemId,
 ) -> Result<Option<InboxItem>, StorageError> {
+    // Convert ID to string for the SQL parameter — all IDs are stored as TEXT.
     let id_str = id.to_string();
 
+    // `fetch_optional` returns None when no row matches — correct for "not found".
     let row: Option<InboxItemRow> = sqlx::query_as(
         "
         SELECT id, raw_text, captured_by, captured_at, source, triage_state, triaged_to
@@ -114,12 +134,14 @@ pub async fn fetch_inbox_item(
         WHERE  id = ?1
         ",
     )
+    // Bind the UUID string to the WHERE clause parameter.
     .bind(id_str)
+    // fetch_optional returns None when no row matches — correct for "not found".
     .fetch_optional(pool)
     .await?;
 
-    // If the row does not exist, return None immediately. This avoids
-    // parsing work for the common "item not found" path.
+    // Transpose the Option: if there's no row, return None immediately without
+    // calling `row_to_inbox_item` — avoids parsing work for the not-found path.
     match row {
         Some(r) => Ok(Some(row_to_inbox_item(r)?)),
         None => Ok(None),
@@ -140,9 +162,11 @@ pub async fn list_recent_inbox_items(
     pool: &SqlitePool,
     limit: u32,
 ) -> Result<Vec<InboxItem>, StorageError> {
-    // Cast limit to i64 for sqlx — SQLite LIMIT is a signed 64-bit integer.
+    // SQLite LIMIT takes a signed 64-bit integer; i64::from is lossless for u32.
     let limit_i64 = i64::from(limit);
 
+    // `fetch_all` returns all matching rows as a Vec. Lists are capped at 100
+    // by the API layer, so memory usage is bounded.
     let rows: Vec<InboxItemRow> = sqlx::query_as(
         "
         SELECT id, raw_text, captured_by, captured_at, source, triage_state, triaged_to
@@ -151,12 +175,15 @@ pub async fn list_recent_inbox_items(
         LIMIT  ?1
         ",
     )
+    // Bind the row count limit to the LIMIT clause.
     .bind(limit_i64)
+    // fetch_all returns all matching rows into a Vec.
     .fetch_all(pool)
     .await?;
 
-    // Convert each row. Collect errors (parse failures) rather than silently
-    // skipping bad rows — a parse failure indicates a data integrity issue.
+    // `.collect()` on `Iterator<Item=Result<T,E>>` stops at the first error —
+    // a parse failure on any row surfaces immediately rather than silently
+    // omitting corrupted rows from the result list.
     rows.into_iter().map(row_to_inbox_item).collect()
 }
 
@@ -168,13 +195,14 @@ pub async fn list_recent_inbox_items(
 /// `list_recent_inbox_items`) share the same parsing logic and any fix
 /// lands in one place.
 fn row_to_inbox_item(row: InboxItemRow) -> Result<InboxItem, StorageError> {
-    // Parse each TEXT column back into its domain type. Parse errors use the
-    // column name in the message so debugging is easier.
+    // All parse steps follow the same pattern: attempt the parse, map the error
+    // to StorageError::Parse with the column name in the message for easy diagnosis.
     let id = row
         .id
         .parse::<InboxItemId>()
         .map_err(|e| StorageError::Parse(format!("id: {e}")))?;
 
+    // Parse captured_by: UUID string → MemberId.
     let captured_by = row
         .captured_by
         .parse::<MemberId>()
@@ -186,26 +214,36 @@ fn row_to_inbox_item(row: InboxItemRow) -> Result<InboxItem, StorageError> {
     let captured_at = OffsetDateTime::parse(&row.captured_at, &Rfc3339)
         .map_err(|e| StorageError::Parse(format!("captured_at: {e}")))?;
 
+    // InboxSource::from_str validates the set of known variant strings;
+    // an unknown string means a newer binary wrote a value this binary can't read.
     let source = row
         .source
         .parse::<InboxSource>()
         .map_err(|e| StorageError::Parse(format!("source: {e}")))?;
 
+    // TriageState parsing mirrors InboxSource — same error shape and semantics.
     let triage_state = row
         .triage_state
         .parse::<TriageState>()
         .map_err(|e| StorageError::Parse(format!("triage_state: {e}")))?;
 
-    // NULL triaged_to maps to None; a non-NULL value wraps the string.
+    // NULL triaged_to maps to None; a non-NULL value wraps the string as-is.
     let triaged_to = row.triaged_to.map(TypedEntityRef);
 
+    // Construct the domain type. All fields have been validated above.
     Ok(InboxItem {
         id,
+        // raw_text is stored verbatim; no transformation on read.
         raw_text: row.raw_text,
+        // captured_by holds the capturing member's UUID-based identifier.
         captured_by,
+        // captured_at was validated as RFC 3339 and carries the UTC offset.
         captured_at,
+        // source is the mechanism through which this item was captured.
         source,
+        // triage_state is the current lifecycle stage of this item.
         triage_state,
+        // triaged_to is None for untriaged items; Some for typed entities.
         triaged_to,
     })
 }

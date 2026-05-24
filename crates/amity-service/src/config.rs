@@ -13,9 +13,12 @@
 // All fields have `#[serde(default)]` so a config file that only overrides one
 // value is valid; missing fields use the defaults below.
 
+// `PathBuf` is used for config and data file paths resolved at runtime.
 use std::path::PathBuf;
 
+// `ProjectDirs` resolves XDG/macOS/Windows platform directories transparently.
 use directories::ProjectDirs;
+// Serde: Deserialize to parse TOML; Serialize for symmetry and potential write-back.
 use serde::{Deserialize, Serialize};
 
 /// Top-level service configuration.
@@ -49,6 +52,9 @@ pub struct DatabaseConfig {
     pub url: String,
 }
 
+// The `Default` impl delegates to `default_database_url()` so the serde
+// `#[serde(default)]` path and the programmatic `DatabaseConfig::default()`
+// path always produce the same value.
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
@@ -74,6 +80,8 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
+// Mirror of the DatabaseConfig default — keeps the serde and programmatic
+// defaults in sync so there is only one source of truth for each value.
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -100,6 +108,8 @@ fn default_port() -> u16 {
 fn default_database_url() -> String {
     // Resolve the platform data directory at runtime. Falls back to a local
     // file if the platform dirs crate cannot determine the directory (unusual).
+    // Falls back to a local file if the platform dirs crate cannot determine
+    // the directory — unusual but possible in restricted environments.
     resolve_default_database_path().map_or_else(
         || "sqlite://amity.db".to_owned(),
         |p| format!("sqlite://{}", p.display()),
@@ -130,9 +140,13 @@ pub fn load_config() -> anyhow::Result<ServiceConfig> {
     match config_path {
         // Config path resolved; check whether the file actually exists.
         Some(path) if path.exists() => {
+            // `read_to_string` is used instead of a BufReader because config files
+            // are always small enough to fit in memory without streaming.
             let content = std::fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("failed to read config at {}: {e}", path.display()))?;
 
+            // `toml::from_str` fills only the fields present in the file; missing
+            // fields fall back to their `#[serde(default)]` functions defined above.
             let config: ServiceConfig = toml::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("invalid config at {}: {e}", path.display()))?;
 

@@ -10,8 +10,12 @@
 // Everything except the bind/serve step lives in the library crate so that
 // integration tests can reuse the same application setup without a network.
 
+// `build_app` owns the axum router; `load_config` reads the config file.
+// `open_database` is imported here rather than re-exported by amity-service
+// to keep the binary responsible for its own startup sequence.
 use amity_service::{build_app, config::load_config};
 use amity_storage::connection::open_database;
+// `EnvFilter` drives `RUST_LOG` environment variable parsing for tracing.
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -25,6 +29,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // Errors here are configuration parse failures — non-recoverable at startup.
     let config = load_config()?;
 
     tracing::info!(
@@ -39,6 +44,8 @@ async fn main() -> anyhow::Result<()> {
     // on first run without any manual migration step.
     let db = open_database(&config.database.url).await?;
 
+    // `build_app` wires the axum router with the database pool as shared state.
+    // The pool is Arc-wrapped inside SqlitePool so cloning it shares the connection.
     let app = build_app(db);
 
     // Construct the bind address from config. Loopback-only by default.
@@ -47,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(address = %bind_addr, "listening");
 
+    // Serve blocks until the process exits or an unrecoverable I/O error occurs.
     axum::serve(listener, app).await?;
 
     Ok(())
