@@ -89,6 +89,27 @@ EventOverride {
 
 Overrides are applied at display time. The underlying external event is never modified.
 
+#### Presence *(MVP)*
+
+Represents a member's availability state over a time window. Not a calendar event — a separate concept that *affects* how scheduling and rotation decisions are made. Covers business travel, offshore rotations, shared-custody alternation, illness, holidays.
+
+```
+Presence {
+  memberId,
+  state(enum: home | away | offshore | with_other_parent | traveling | unavailable),
+  from, until,
+  note?,
+  affectsChoreRotation: bool   # default: true for away/offshore/with_other_parent
+}
+```
+
+Behaviour:
+
+- The chore rotation logic consults `Presence` before proposing assignees.
+- The *Week* view visually mutes members who are not `home` for that day.
+- "Who's at dinner Wednesday?" is answered by querying Presence, not by guessing from calendar events.
+- For children under shared custody, alternating-week patterns are expressed as recurring Presence windows. This avoids needing custody-specific code paths elsewhere.
+
 #### Task *(MVP)*
 
 Due-by *window*, not a slot. Completable. May recur. Covers chores, errands, recurring obligations whose timing is flexible (taxes by April 30; clothes shopping before winter; chimney sweep this year).
@@ -174,7 +195,23 @@ Every entity carries:
 - `ownerId?` — the member primarily responsible for the item. Distinct from `assigneeIds[]` on Task: owner is *accountability*, assignees are *doing*. They may be the same person.
 - `tags[]` — free-form. The system does not impose a taxonomy.
 
-### 3.7 Recurrence and cadence (draft DSL)
+### 3.7 Time zones and recurrence policy
+
+These are policy defaults for the system. They can be overridden per-item but should rarely need to be.
+
+**Time zones.** Each `Event` stores its time zone alongside its datetime. Native hub events default to Europe/Amsterdam. Externally-sourced events keep whatever the source declared.
+
+- **The hub always displays home time** (Europe/Amsterdam). It is a kitchen device, in the kitchen. There is no "viewer time zone" question.
+- **The mobile app displays home time by default**, with an optional secondary line showing "your current local time" when the user is traveling. This applies only to events the user is personally attending; place-anchored events (school, bins) show home time only.
+- Events explicitly anchored to a place (school day, garbage collection) are never converted to a traveler's local time. They show as they are in the place where they happen.
+
+**Recurrence edge defaults.**
+
+- **Holidays.** For externally-sourced recurring events, trust the source — the municipality and the schools already handle Dutch public holidays in their ICS feeds. For native recurring Tasks and Events: skip on declared NL public holidays for items tagged `chore` or `household`; run regardless otherwise. The holiday list is loaded from a maintained public source at install and refreshed annually.
+- **Daylight savings.** All native recurring items anchor to local time. "08:00 every Thursday" stays at 08:00 on the household's wall clock through DST transitions.
+- **Deleting a single instance** of a recurring item creates an `EventOverride` with `action=cancel` for that instance only. An undo affordance offers "actually, delete the whole series" within a short window. Default action is the safe one (one instance), not the destructive one (whole series).
+
+### 3.8 Recurrence and cadence (draft DSL)
 
 Recurrence is expressed as a small human-readable string, parsed into a rule. Examples:
 
@@ -195,7 +232,7 @@ Cadence (used by Thread `desiredCadence` and post-MVP Anchor surfacing) is softe
 
 The tilde is meaningful: cadence is a *preference*, not a rule. The system never raises an alarm when a cadence elapses; it just adjusts what it might gently surface.
 
-### 3.8 Design boundaries — what this model is *not* trying to be
+### 3.9 Design boundaries — what this model is *not* trying to be
 
 These are positive scope choices, not omissions.
 
@@ -205,11 +242,12 @@ These are positive scope choices, not omissions.
 - **Not a goal-tracker.** Anchors are not goals. They are reminders the user issues to themselves of who they want to be. The system does not measure progress toward them.
 - **Not an engagement product.** A successful day on the hub is one where the family barely needed to look at it. The product is allowed — encouraged — to recede.
 
-### 3.9 What changed from the original §3
+### 3.10 What changed from the original §3
 
 - Original `Recipe`, `Meal`, `List`, `MaintenanceItem` entities are deferred to their respective cluster discussions (Cluster 3 meals/groceries; Cluster 2 chores/maintenance) and not redefined here. They will hang off `Task` and `Project` where appropriate.
 - `difficulty` field removed from Task (subsumed by `effort`).
 - `RotationRule` is retained conceptually but moves to the Cluster 2 chores discussion. It is a behaviour over Tasks, not an entity.
-- New entities: `InboxItem`, `EventOverride`, `Project`, `Thread`, `Anchor`.
+- New entities: `InboxItem`, `EventOverride`, `Presence`, `Project`, `Thread`, `Anchor`.
 - New explicit layers above entities: capture (inbox) and surfacing (unified stream).
-- New explicit non-goals section.
+- New time-zone and recurrence policy section.
+- New explicit design-boundaries section.
