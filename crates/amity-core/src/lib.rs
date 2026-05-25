@@ -8,8 +8,12 @@
 //   amity-service → amity-storage → amity-core
 //
 // Modules:
-//   ids    — typed ID newtypes for all entities (InboxItemId, MemberId, …)
-//   inbox  — InboxItem domain type and its builder
+//   ids                     — typed ID newtypes for all entities
+//   inbox                   — InboxItem domain type and its builder
+//   recurrence              — RecurrenceRule type and RRULE validation
+//   recurrence_materialiser — RFC 5545 instance generation (uses rrule crate)
+//   task                    — Task domain type, builder, enums
+//   completion_log          — CompletionLog domain type
 
 /// Typed ID newtypes. See module docs for the rationale.
 pub mod ids;
@@ -18,3 +22,26 @@ pub mod ids;
 ///
 /// The Inbox is the first promise Amity makes — see brief §6.3.
 pub mod inbox;
+
+/// `RecurrenceRule` and RRULE validation against the supported subset.
+///
+/// The supported subset is DAILY/WEEKLY/MONTHLY/YEARLY with BYDAY, BYMONTHDAY,
+/// INTERVAL, COUNT, and UNTIL. See `docs/adrs/0002-recurrence-engine.md`.
+pub mod recurrence;
+
+/// Instance materialisation: `RecurrenceRule` → `Vec<OffsetDateTime>`.
+///
+/// Delegates RFC 5545 parsing and DST handling to the `rrule` crate.
+/// Converts outputs back to `time::OffsetDateTime` at the boundary.
+pub mod recurrence_materialiser;
+
+/// `Task`, `TaskBuilder`, `TaskStatus`, `EffortLevel`, `Priority`, `TaskError`.
+///
+/// Task is the most-used entity in Amity — see brief §6.5 and §8.
+pub mod task;
+
+/// `CompletionLog` — the immutable record of a Task instance being completed.
+///
+/// The substrate for the household's own fairness conversations.
+/// See brief §6.5 (`CompletionLog`) and §8.2 (chore-completion model).
+pub mod completion_log;

@@ -2,7 +2,7 @@
 //
 // This crate owns all persistence concerns for Amity:
 //   • Database connection pool setup and migration application.
-//   • Repository functions per entity (currently: inbox).
+//   • Repository functions per entity (inbox, task, completion_log, task_instance).
 //
 // The storage layer is deliberately dumb — no business logic lives here.
 // Business logic belongs in amity-core; the service layer (amity-service)
@@ -13,14 +13,33 @@
 // fresh pool against a temp file without any global state.
 //
 // Modules:
-//   connection  — pool construction and migration application
-//   inbox       — repository functions for InboxItem
+//   connection      — pool construction and migration application
+//   inbox           — repository functions for InboxItem
+//   task            — repository functions for Task
+//   completion_log  — repository functions for CompletionLog (append-only)
+//   task_instance   — repository functions for materialised task instances
 
 /// Database connection pool construction and migration application.
 pub mod connection;
 
 /// Repository functions for [`amity_core::inbox::InboxItem`].
 pub mod inbox;
+
+/// Repository functions for [`amity_core::task::Task`].
+///
+/// Exposes insert, fetch, list (with filter), update, and mark-done/skipped.
+pub mod task;
+
+/// Repository functions for [`amity_core::completion_log::CompletionLog`].
+///
+/// Append-only — there is no update or delete path.
+pub mod completion_log;
+
+/// Repository functions for materialised `task_instances` rows.
+///
+/// Exposes bulk upsert, upcoming-instances query, and pruning/deletion helpers
+/// used by the recurrence materialisation background job.
+pub mod task_instance;
 
 // Re-export the error type at the crate root so callers only need one import.
 pub use error::StorageError;

@@ -19,6 +19,7 @@ repository.workspace = true
 amity-core  = { path = "../amity-core" }
 
 serde       = { workspace = true }
+serde_json  = { workspace = true }
 sqlx        = { workspace = true }
 uuid        = { workspace = true }
 time        = { workspace = true }

@@ -120,6 +120,32 @@ define_id!(
     MemberId
 );
 
+define_id!(
+    /// Unique identifier for a [`Task`](crate::task::Task).
+    ///
+    /// See brief §6.5 for the Task data model. Time-ordered UUID v7 keeps
+    /// related task rows physically adjacent in the B-tree index.
+    TaskId
+);
+
+define_id!(
+    /// Unique identifier for a [`CompletionLog`](crate::completion_log::CompletionLog).
+    ///
+    /// Each completed or skipped task instance writes one `CompletionLog` row.
+    /// See brief §6.5 (`CompletionLog`) and §8.2 (chore-completion model).
+    CompletionLogId
+);
+
+define_id!(
+    /// Stub identifier for a Project entity.
+    ///
+    /// The Project entity is not yet implemented (Task 2 scope guardrails).
+    /// The ID type is declared now so that `Task.project_id` has a proper
+    /// typed `Option<ProjectId>` rather than a bare `Option<Uuid>`. The
+    /// field is always `None` until the Project entity lands.
+    ProjectId
+);
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -139,6 +165,8 @@ mod tests {
     fn member_id_new_is_unique() {
         // Same guarantee as `inbox_item_id_new_is_unique` — each type is tested
         // separately because the macro generates distinct implementations.
+        // Two calls in the same millisecond must still produce distinct IDs
+        // (UUID v7 adds random bits after the timestamp for this reason).
         let a = MemberId::new();
         let b = MemberId::new();
         assert_ne!(a, b);
@@ -175,5 +203,34 @@ mod tests {
         let _member: MemberId = MemberId::new();
         // The following would be a compile error (intentionally omitted):
         // let _: InboxItemId = _member;
+    }
+
+    #[test]
+    fn task_id_new_is_unique() {
+        // Each call to `new()` must produce a distinct ID — same guarantee as
+        // the inbox/member tests, verified separately per the macro's contract.
+        let a = TaskId::new();
+        let b = TaskId::new();
+        assert_ne!(a, b, "consecutive TaskIds must be distinct");
+    }
+
+    #[test]
+    fn completion_log_id_new_is_unique() {
+        // CompletionLogId is a distinct newtype; verify its uniqueness guarantee.
+        // Tested separately from `InboxItemId` and `MemberId` because the macro
+        // generates independent implementations that must each be correct.
+        let a = CompletionLogId::new();
+        let b = CompletionLogId::new();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn project_id_stub_is_usable() {
+        // ProjectId is a stub — no Project entity yet, but the type must be
+        // constructable so Task.project_id = None compiles without an explicit
+        // type annotation at the call site.
+        let _: Option<ProjectId> = None;
+        // Creating one must not panic — the UUID source is always available.
+        let _id = ProjectId::new();
     }
 }

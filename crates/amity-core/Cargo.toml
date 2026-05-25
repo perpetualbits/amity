@@ -18,6 +18,10 @@ serde     = { workspace = true }
 uuid      = { workspace = true }
 time      = { workspace = true }
 thiserror = { workspace = true }
+# rrule and chrono are used only in recurrence_materialiser.rs for RFC 5545
+# rule parsing and DST-correct instance generation. See ADR-0002.
+rrule  = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

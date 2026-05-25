@@ -68,3 +68,12 @@ time        = { version = "0.3", features = ["serde", "formatting", "parsing", "
 
 # Configuration file location per XDG / platform conventions.
 directories = { version = "5" }
+
+# Recurrence engine — RFC 5545 RRULE subset for recurring Tasks.
+# Approved in the task-2 spec as a new dependency; see ADR-0002.
+rrule  = { version = "0.11" }
+# chrono is a direct (not merely transitive) dependency because the
+# recurrence materialiser performs explicit DateTime conversions at the
+# rrule↔time crate boundary. The time crate remains preferred for all other
+# date/time handling throughout the codebase.
+chrono = { version = "0.4" }
