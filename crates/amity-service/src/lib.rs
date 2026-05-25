@@ -8,11 +8,12 @@
 //   config  — configuration loading from TOML
 //   api     — HTTP handler modules (one per entity)
 
+// `api` contains one sub-module per entity (inbox, task, …).
 pub mod api;
 pub mod config;
 
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use sqlx::SqlitePool;
 use tower_http::trace::TraceLayer;
 
@@ -36,13 +37,41 @@ pub struct AppState {
 /// The `TraceLayer` wraps every request in a tracing span, which gives
 /// structured logs (method, path, status, latency) with zero handler boilerplate.
 pub fn build_app(db: SqlitePool) -> Router {
+    // Wrap the pool in the shared state struct before injecting it via `with_state`.
     let state = AppState { db };
 
     Router::new()
         // Inbox endpoints — see api/inbox.rs for handler documentation.
         .route("/api/v1/inbox", post(api::inbox::capture_inbox_item))
         .route("/api/v1/inbox/recent", get(api::inbox::list_recent))
+        // Task endpoints — see api/task.rs for handler documentation.
+        // NOTE: /upcoming must be registered before /{id} so axum does not try
+        // to parse the literal "upcoming" as a UUID path segment.
+        .route("/api/v1/tasks", post(api::task::create_task))
+        .route("/api/v1/tasks", get(api::task::list_tasks_handler))
+        // Upcoming registered before /{id} to prevent "upcoming" being parsed as a UUID.
+        .route("/api/v1/tasks/upcoming", get(api::task::list_upcoming))
+        .route("/api/v1/tasks/{id}", get(api::task::get_task))
+        .route("/api/v1/tasks/{id}", patch(api::task::patch_task))
+        // Task action endpoints — each is a POST to a named sub-resource.
+        .route(
+            "/api/v1/tasks/{id}/complete",
+            post(api::task::complete_task),
+        )
+        .route("/api/v1/tasks/{id}/skip", post(api::task::skip_task))
+        .route(
+            "/api/v1/tasks/{id}/assignee",
+            post(api::task::change_assignee),
+        )
+        // History is read-only (GET) — the append-only log is never modified.
+        .route(
+            "/api/v1/tasks/{id}/history",
+            get(api::task::get_task_history),
+        )
         // Attach tracing middleware so every request is logged automatically.
+        // `TraceLayer` produces structured spans (method, path, status, latency).
         .layer(TraceLayer::new_for_http())
+        // Inject shared state into all handlers via axum's `State<AppState>` extractor.
+        // Every handler that declares `State(state): State<AppState>` receives a clone.
         .with_state(state)
 }

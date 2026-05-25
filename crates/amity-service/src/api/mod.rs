@@ -7,7 +7,17 @@
 // deployed alongside the current version without path conflicts.
 //
 // Current routes:
-//   POST /api/v1/inbox         — capture a new inbox item
-//   GET  /api/v1/inbox/recent  — list recent inbox items
+//   POST  /api/v1/inbox                    — capture a new inbox item
+//   GET   /api/v1/inbox/recent             — list recent inbox items
+//   POST  /api/v1/tasks                    — create a task
+//   GET   /api/v1/tasks                    — list tasks (with filters)
+//   GET   /api/v1/tasks/upcoming           — upcoming recurring instances
+//   GET   /api/v1/tasks/{id}              — fetch a task
+//   PATCH /api/v1/tasks/{id}             — update a task
+//   POST  /api/v1/tasks/{id}/complete    — mark done
+//   POST  /api/v1/tasks/{id}/skip        — mark skipped
+//   POST  /api/v1/tasks/{id}/assignee    — change current_assignee_id
+//   GET   /api/v1/tasks/{id}/history     — list completion log entries
 
 pub mod inbox;
+pub mod task;

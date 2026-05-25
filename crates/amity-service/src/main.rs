@@ -15,6 +15,8 @@
 // to keep the binary responsible for its own startup sequence.
 use amity_service::{build_app, config::load_config};
 use amity_storage::connection::open_database;
+// `ProjectDirs` resolves the platform data directory for the auto-create step.
+use directories::ProjectDirs;
 // `EnvFilter` drives `RUST_LOG` environment variable parsing for tracing.
 use tracing_subscriber::EnvFilter;
 
@@ -28,6 +30,21 @@ async fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    // Ensure the data directory exists before loading config or opening the DB.
+    // On first run `~/.local/share/amity/` (XDG) / `~/Library/Application Support/amity/`
+    // (macOS) / `%APPDATA%\amity\` (Windows) may not exist; `create_dir_all`
+    // is idempotent so it is safe to call on every startup.
+    if let Some(dirs) = ProjectDirs::from("", "amity", "amity") {
+        let data_dir = dirs.data_dir();
+        std::fs::create_dir_all(data_dir).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to create data directory {}: {e}",
+                data_dir.display()
+            )
+        })?;
+        tracing::debug!(path = %data_dir.display(), "data directory ready");
+    }
 
     // Errors here are configuration parse failures — non-recoverable at startup.
     let config = load_config()?;
@@ -48,14 +65,20 @@ async fn main() -> anyhow::Result<()> {
     // The pool is Arc-wrapped inside SqlitePool so cloning it shares the connection.
     let app = build_app(db);
 
-    // Construct the bind address from config. Loopback-only by default.
+    // Construct the bind address from config. Loopback-only by default
+    // so the service is not reachable from other machines without explicit
+    // reconfiguration — appropriate for a household hub device.
     let bind_addr = format!("{}:{}", config.server.bind_address, config.server.port);
+    // Bind the TCP socket; fails fast if the port is already in use.
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 
     tracing::info!(address = %bind_addr, "listening");
 
-    // Serve blocks until the process exits or an unrecoverable I/O error occurs.
+    // `serve` blocks until the process exits or an unrecoverable I/O error occurs.
+    // On normal shutdown (SIGTERM / SIGINT) the OS cleans up the socket.
     axum::serve(listener, app).await?;
 
+    // Return Ok to satisfy anyhow::Result; unreachable in practice since
+    // `serve` only returns on I/O error, which propagates via `?` above.
     Ok(())
 }
