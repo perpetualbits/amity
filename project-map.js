@@ -185,25 +185,32 @@ window.PROJECT_MAP = {
       id: "surfacing",
       label: "Surfacing stream",
       layer: "flows",
-      status: "seam",
-      tags: ["Phase 1", "Today / Week"],
+      status: "active",
+      tags: ["Phase 1", "Task 3", "Today / Week"],
       desc:
-        "The hard part of the whole system: one ranked, mixed-type query that " +
-        "feeds the Today and Week views without becoming a nag-machine. The " +
-        "GET /tasks/upcoming endpoint is the seed data source; the cross-entity " +
-        "ranking, the designed empty state, and the views themselves are not " +
-        "built. Tone is a property of this layer, not of individual items.",
-      files: ["crates/amity-service/src/api/task.rs"],
+        "The hard part of the whole system: one ranked query that feeds the Today " +
+        "view without becoming a nag-machine. The pure ranking rule and the " +
+        "GET /surfacing/today endpoint are shipped and tested — a task surfaces on " +
+        "its day, or when open-and-overdue, and an empty day returns a calm " +
+        "\"nothing today\". It ranks Tasks only for now, behind a mixed-type seam; " +
+        "the cross-entity stream and the Today / Week views are still to come. " +
+        "Tone is a property of this layer: overdue reads as information, never a " +
+        "lateness count.",
+      files: [
+        "crates/amity-core/src/surfacing.rs",
+        "crates/amity-service/src/api/surfacing.rs",
+      ],
       specs: [
         { label: "Task 3 — surfacing & Today view", href: "docs/task_3_surfacing_and_today_view.md" },
         { label: "Brief §6.4 — surfacing", href: "docs/amity_brief.md" },
         { label: "Brief §18 — roadmap", href: "docs/amity_brief.md" },
       ],
       parts: [
-        { label: "Upcoming-instances query", status: "done", desc: "GET /tasks/upcoming returns materialised instances within a window." },
-        { label: "Cross-entity ranking", status: "planned", desc: "A single query across Event, Task, Project, Thread with time / priority / Presence inputs." },
-        { label: "Designed empty state", status: "planned", desc: "\"nothing today\" as a real, calm state — brief §3." },
-        { label: "Today / Week views", status: "planned", desc: "The rich rendering of the ranked stream." },
+        { label: "Ranking rule (rank_today)", status: "done", desc: "Pure, tested: window ∩ today or overdue-open; ordered by time, then priority." },
+        { label: "GET /surfacing/today endpoint", status: "done", desc: "Assembles candidates from storage and returns uniform SurfacedItems + empty-state flag." },
+        { label: "Empty-state result (has_surfaced)", status: "done", desc: "\"nothing today\" is a real result, not an error — brief §3." },
+        { label: "Cross-entity ranking", status: "planned", desc: "Extend the SurfacedKind seam to Event, Project, Thread." },
+        { label: "Today / Week views", status: "planned", desc: "The rich hub rendering of the ranked stream (frontend)." },
       ],
       deps: ["task", "api"],
     },
@@ -439,20 +446,25 @@ window.PROJECT_MAP = {
       id: "jobs",
       label: "Recurrence horizon job",
       layer: "service",
-      status: "seam",
-      tags: ["Phase 4"],
+      status: "done",
+      tags: ["Phase 4", "Task 3"],
       desc:
         "Recurring tasks materialise their instances at creation time, out to a " +
-        "60-day horizon. The daily background job that rolls that horizon forward " +
-        "and prunes aged-out instances is specified (ADR-0002) but not yet " +
-        "implemented — an explicit TODO in the task API. The prune helper exists " +
-        "in storage; nothing calls it on a schedule.",
-      files: ["crates/amity-service/src/api/task.rs", "crates/amity-storage/src/task_instance.rs"],
+        "60-day horizon. The background job that rolls that horizon forward and " +
+        "prunes aged-out instances — the ADR-0002 TODO — now exists: run_once does " +
+        "one maintenance pass (materialise every recurring task to +60 days, prune " +
+        "instances older than 30 days), and spawn runs it on startup and daily via " +
+        "a tokio interval. The materialisation mapping is shared with the task-create " +
+        "path so it lives in one place.",
+      files: [
+        "crates/amity-service/src/jobs/recurrence_horizon.rs",
+        "crates/amity-storage/src/task_instance.rs",
+      ],
       specs: [{ label: "ADR-0002 — recurrence engine", href: "docs/adrs/0002-recurrence-engine.md" }],
       parts: [
         { label: "Materialise-at-create", status: "done", desc: "New recurring tasks get instances up to the 60-day horizon immediately." },
-        { label: "Prune helper", status: "done", desc: "prune_old_instances exists in storage, keeping the last 30 days." },
-        { label: "Daily horizon extension", status: "planned", desc: "The scheduled job that extends the horizon and calls prune — not built." },
+        { label: "Prune helper", status: "done", desc: "prune_old_instances in storage keeps the last 30 days." },
+        { label: "Daily horizon extension", status: "done", desc: "run_once + spawn roll the horizon forward and prune on startup and every 24h." },
       ],
       deps: ["recurrence", "storage"],
     },
@@ -578,7 +590,7 @@ window.PROJECT_MAP = {
   // backend and its recurrence engine — rather than strictly phase by phase, so
   // phases 1, 3 and 4 are all partly done at once while 2, 5 and 6 are untouched.
   roadmap: [
-    { id: "t3", kind: "next", label: "Task 3 · Surfacing + Today view", status: "planned" },
+    { id: "t3", kind: "next", label: "Task 3 · Surfacing + Today view", status: "active" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
     { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },
