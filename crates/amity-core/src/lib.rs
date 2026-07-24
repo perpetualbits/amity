@@ -45,3 +45,10 @@ pub mod task;
 /// The substrate for the household's own fairness conversations.
 /// See brief §6.5 (`CompletionLog`) and §8.2 (chore-completion model).
 pub mod completion_log;
+
+/// `SurfacedItem`, `SurfaceCandidate`, `SurfacingConfig`, and `rank_today`.
+///
+/// The ranked "what's on today" query as pure domain logic — where Amity
+/// chooses information over pressure. See brief §6.4 (surfacing) and §3
+/// (the designed empty state), and `docs/task_3_surfacing_and_today_view.md`.
+pub mod surfacing;
