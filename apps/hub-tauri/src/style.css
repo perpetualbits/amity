@@ -185,3 +185,183 @@ body {
   /* Tabular figures so times align vertically in the list. */
   font-variant-numeric: tabular-nums;
 }
+
+/* ── View switch (Today / Capture) ─────────────────────────────────────────── */
+
+.viewswitch {
+  display: flex;
+  gap: 1px;
+  /* A hairline frame, not a pill — consistent with the calm register. */
+  border: 1px solid #ccc;
+  background: #ccc;
+  align-self: flex-start;
+}
+
+.seg {
+  font-family: inherit;
+  font-size: 1rem;
+  /* 60px minimum touch target height (brief §12.4). */
+  min-height: 60px;
+  padding: 0 1.5rem;
+  border: none;
+  background: #f5f4f0;
+  color: #555;
+  cursor: pointer;
+}
+
+.seg:hover:not(.active) {
+  background: #eee;
+}
+
+.seg.active {
+  /* The active tab is carried by fill AND weight, not colour alone. */
+  background: #1a1a1a;
+  color: #f5f4f0;
+  font-weight: 700;
+}
+
+/* ── Today view ────────────────────────────────────────────────────────────── */
+
+.today-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.today-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #e0dfd9;
+}
+
+.today-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.today-title {
+  font-size: 1.15rem;
+}
+
+.today-meta {
+  font-size: 0.85rem;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+
+.today-overdue {
+  /* Information, not alarm: plain text, no red, no count of days late. */
+  color: #6a5a2a;
+}
+
+.today-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.today-done,
+.today-reassign {
+  font-family: inherit;
+  font-size: 0.95rem;
+  /* 60px minimum touch targets on the primary per-item actions. */
+  min-height: 60px;
+  min-width: 60px;
+  padding: 0 1rem;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.today-done {
+  background: #1a1a1a;
+  color: #f5f4f0;
+}
+
+.today-reassign {
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.today-done:disabled,
+.today-reassign:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Add-a-task form ───────────────────────────────────────────────────────── */
+
+.addtask-toggle {
+  font-family: inherit;
+  font-size: 1rem;
+  min-height: 60px;
+  padding: 0 1.25rem;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  background: #fff;
+  color: #1a1a1a;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.taskform {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid #ccc;
+  background: #fff;
+}
+
+.taskform-label {
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.taskform-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.taskform-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #555;
+  flex: 1;
+  min-width: 8rem;
+}
+
+.taskform-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.taskform-submit {
+  /* Reuses .capture-submit sizing; widen it for the text label. */
+  min-width: auto;
+  padding: 0 1.5rem;
+  font-size: 1.05rem;
+}
+
+.taskform-cancel {
+  font-family: inherit;
+  font-size: 1rem;
+  min-height: 60px;
+  padding: 0 1.25rem;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  background: #f5f4f0;
+  color: #555;
+  cursor: pointer;
+}
