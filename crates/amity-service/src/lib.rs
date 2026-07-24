@@ -11,6 +11,8 @@
 // `api` contains one sub-module per entity (inbox, task, …).
 pub mod api;
 pub mod config;
+// `jobs` contains background maintenance tasks spawned from `main`.
+pub mod jobs;
 
 use axum::Router;
 use axum::routing::{get, patch, post};

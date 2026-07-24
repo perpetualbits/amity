@@ -61,6 +61,11 @@ async fn main() -> anyhow::Result<()> {
     // on first run without any manual migration step.
     let db = open_database(&config.database.url).await?;
 
+    // Spawn the recurrence horizon maintenance job. It runs once immediately —
+    // extending materialised task instances to the 60-day horizon and pruning
+    // aged-out ones — and then daily. Cloning the pool is cheap (Arc inside).
+    amity_service::jobs::recurrence_horizon::spawn(db.clone());
+
     // `build_app` wires the axum router with the database pool as shared state.
     // The pool is Arc-wrapped inside SqlitePool so cloning it shares the connection.
     let app = build_app(db);

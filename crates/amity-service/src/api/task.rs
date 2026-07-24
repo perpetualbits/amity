@@ -73,9 +73,7 @@ use amity_storage::task::{
     TaskFilter, fetch_task, insert_task, list_tasks, mark_task_done, mark_task_skipped, update_task,
 };
 // Task instance functions: materialise, list upcoming, prune, and delete-on-change.
-use amity_storage::task_instance::{
-    TaskInstance, delete_future_instances, list_upcoming_instances, upsert_task_instances,
-};
+use amity_storage::task_instance::{delete_future_instances, list_upcoming_instances};
 
 // `AppState` carries the shared `SqlitePool` injected by `build_app`.
 use crate::AppState;
@@ -634,8 +632,8 @@ pub async fn create_task(
     // If this fails (e.g. invalid timezone not caught by validation), we log a
     // warning but still return 201 — the task was persisted. The background job
     // will retry materialisation on its next scheduled run.
-    if let Some(ref rule) = recurrence
-        && let Err(e) = materialise_and_store_instances(&state, &task, rule, now).await
+    if recurrence.is_some()
+        && let Err(e) = materialise_and_store_instances(&state, &task, now).await
     {
         tracing::warn!(task_id = %task.id, error = %e, "initial recurrence materialisation failed");
     }
@@ -1080,7 +1078,7 @@ pub async fn patch_task(
     //
     // When the recurrence rule changes, previously-materialised future instances
     // belong to the old schedule and must be replaced (ADR-0002 §mid-flight).
-    if recurrence_changed && let Some(ref rule) = task.recurrence {
+    if recurrence_changed && task.recurrence.is_some() {
         // The cutoff is `updated_at` — instances at or after this moment are "future".
         let now = task.updated_at;
         // Step 1: delete old future instances for this task.
@@ -1088,7 +1086,7 @@ pub async fn patch_task(
             tracing::warn!(task_id = %task.id, error = %e, "failed to delete old instances");
         }
         // Step 2: generate and store new instances from the updated rule.
-        if let Err(e) = materialise_and_store_instances(&state, &task, rule, now).await {
+        if let Err(e) = materialise_and_store_instances(&state, &task, now).await {
             tracing::warn!(task_id = %task.id, error = %e, "re-materialisation after recurrence change failed");
         }
     }
@@ -1541,48 +1539,16 @@ fn parse_date(s: &str) -> Result<time::Date, String> {
 async fn materialise_and_store_instances(
     state: &AppState,
     task: &Task,
-    rule: &RecurrenceRule,
     from: OffsetDateTime,
 ) -> Result<(), String> {
-    // Set the forward horizon to 60 days from the start time.
-    // The background job (not yet implemented) extends this on a daily schedule.
+    // The forward horizon is 60 days from the start time — the same window the
+    // recurrence horizon job rolls forward on its daily schedule.
     let horizon = from + time::Duration::days(60);
 
-    // No holiday skip set at this stage — the holiday calendar source is not
-    // yet wired in. The stub returns an empty `HashSet`, so all instances are kept.
-    let skip_dates = std::collections::HashSet::new();
-
-    // Call the core materialiser: RRULE + DTSTART + IANA timezone → scheduled datetimes.
-    // Wall-clock time is preserved across DST transitions (08:00 stays 08:00).
-    let datetimes = amity_core::recurrence_materialiser::materialise_instances(
-        rule,
-        from,
-        horizon,
-        &skip_dates,
-    )
-    .map_err(|e| format!("materialise_instances: {e}"))?;
-
-    // Convert each `OffsetDateTime` to a `TaskInstance` struct for storage.
-    let instances: Vec<TaskInstance> = datetimes
-        .into_iter()
-        .map(|scheduled_at| TaskInstance {
-            // Generate a fresh UUID v7 for each instance row.
-            // UUID v7 is time-ordered, which makes the table index-friendly.
-            id: uuid::Uuid::now_v7().to_string(),
-            // Link back to the parent recurring task.
-            task_id: task.id,
-            scheduled_at,
-            // Inherit the parent task's default assignee for each new instance.
-            // The user can override this per-instance via the assignee endpoint.
-            current_assignee_id: task.current_assignee_id,
-        })
-        .collect();
-
-    // Persist the instances via INSERT OR IGNORE.
-    // If this function is called twice for the same time window (e.g. after a
-    // concurrent materialisation run), duplicates are silently skipped because
-    // the `(task_id, scheduled_at)` UNIQUE constraint is enforced at the DB level.
-    upsert_task_instances(&state.db, &instances)
+    // Delegate to the shared helper so the "datetimes → TaskInstance → upsert"
+    // mapping lives in exactly one place (the job reuses it too). The instance
+    // count is not needed here; creation only cares about success or failure.
+    crate::jobs::recurrence_horizon::materialise_task_to_horizon(&state.db, task, from, horizon)
         .await
-        .map_err(|e| format!("upsert_task_instances: {e}"))
+        .map(|_count| ())
 }
