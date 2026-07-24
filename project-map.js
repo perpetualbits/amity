@@ -195,6 +195,7 @@ window.PROJECT_MAP = {
         "built. Tone is a property of this layer, not of individual items.",
       files: ["crates/amity-service/src/api/task.rs"],
       specs: [
+        { label: "Task 3 — surfacing & Today view", href: "docs/task_3_surfacing_and_today_view.md" },
         { label: "Brief §6.4 — surfacing", href: "docs/amity_brief.md" },
         { label: "Brief §18 — roadmap", href: "docs/amity_brief.md" },
       ],
@@ -569,12 +570,15 @@ window.PROJECT_MAP = {
   ],
 
   // ── Roadmap ────────────────────────────────────────────────────────────────
-  // Phases from the brief's Quarter-1 sketch (§18.1); hardening items from the
-  // validation drills (§18.2). Status reflects reality, which diverged from the
+  // A "next" entry names the actively-scheduled next task (does not count toward
+  // the phase/hardening tallies). Phases come from the brief's Quarter-1 sketch
+  // (§18.1); hardening items from the validation drills (§18.2). Status reflects
+  // reality, which diverged from the
   // linear plan: the maintainer built vertically — foundation plus the Task
   // backend and its recurrence engine — rather than strictly phase by phase, so
   // phases 1, 3 and 4 are all partly done at once while 2, 5 and 6 are untouched.
   roadmap: [
+    { id: "t3", kind: "next", label: "Task 3 · Surfacing + Today view", status: "planned" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
     { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },

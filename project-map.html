@@ -631,6 +631,7 @@
       g.appendChild(track);
       roadmap.appendChild(g);
     }
+    roadmapGroup("next", "Next up · scheduled", PM.roadmap.filter(function (r) { return r.kind === "next"; }));
     roadmapGroup("phase", "Phases · brief §18.1", phases);
     roadmapGroup("harden", "Hardening · brief §18.2", hardens);
     app.appendChild(roadmap);
