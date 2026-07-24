@@ -247,6 +247,16 @@
   }
   .edge.hi { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }
   .graph.has-active .edge:not(.hi) { opacity: .12; }
+  /* Seam edges (e.g. inbox → task triage): dashed and teal, not a solid dep. */
+  .edge.seam { stroke: var(--st-seam); stroke-dasharray: 5 4; }
+  .edge.seam.hi { stroke: var(--st-seam); stroke-width: 2.2; opacity: 1; }
+  .edge-label {
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: .14em;
+    text-transform: uppercase; fill: var(--st-seam);
+    paint-order: stroke; stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round;
+    transition: opacity .18s ease;
+  }
+  .graph.has-active .edge-label:not(.hi) { opacity: .1; }
 
   .band {
     position: relative; z-index: 1;
@@ -367,6 +377,7 @@
     border-radius: 7px; padding: 4px 9px; cursor: pointer; color: var(--ink);
     transition: border-color .16s ease, transform .12s ease;
   }
+  .dep-chip-seam { border-left-style: dashed; }
   .dep-chip:hover { border-color: var(--sc); transform: translateY(-1px); }
   .dep-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -464,10 +475,15 @@
     var edgeList = [];
     PM.nodes.forEach(function (n) {
       (n.deps || []).forEach(function (d) {
-        if (!nodeById[d]) return;
-        adj[n.id][d] = true;
-        adj[d][n.id] = true;
-        edgeList.push({ from: n.id, to: d });
+        // A dep is either a plain node id (a solid dependency) or a typed edge
+        // object { to, kind, label } — e.g. the dashed "triage" seam.
+        var to = (typeof d === "string") ? d : d.to;
+        var kind = (typeof d === "string") ? null : (d.kind || null);
+        var label = (typeof d === "string") ? null : (d.label || null);
+        if (!nodeById[to]) return;
+        adj[n.id][to] = true;
+        adj[to][n.id] = true;
+        edgeList.push({ from: n.id, to: to, kind: kind, label: label });
       });
     });
 
@@ -700,24 +716,50 @@
       var specs = linkList("Specs", n.specs, "href", "label");
       if (specs) details.appendChild(specs);
 
-      if (n.deps && n.deps.length) {
+      // Build a chip that jumps to another node. `forceClass` lets a seam chip
+      // stay teal regardless of the target's own status.
+      function depChip(targetId, text, forceClass) {
+        var dep = nodeById[targetId];
+        if (!dep) return null;
+        var chip = el("button", "dep-chip " + (forceClass || statusClass(dep.status)));
+        chip.type = "button";
+        chip.textContent = text || dep.label;
+        chip.addEventListener("click", function () {
+          selectNode(targetId);
+          if (nodeEls[targetId]) nodeEls[targetId].focus();
+        });
+        return chip;
+      }
+
+      // Solid dependencies (plain string ids) vs. typed edges like the triage seam.
+      var plainDeps = (n.deps || []).filter(function (d) { return typeof d === "string"; });
+      var seamDeps = (n.deps || []).filter(function (d) { return d && typeof d === "object"; });
+
+      if (plainDeps.length) {
         var dsec = el("div", "d-section");
         dsec.appendChild(el("h3", null, "Depends on"));
         var deps = el("div", "deps");
-        n.deps.forEach(function (d) {
-          var dep = nodeById[d];
-          if (!dep) return;
-          var chip = el("button", "dep-chip " + statusClass(dep.status));
-          chip.type = "button";
-          chip.textContent = dep.label;
-          chip.addEventListener("click", function () {
-            selectNode(d);
-            if (nodeEls[d]) nodeEls[d].focus();
-          });
-          deps.appendChild(chip);
+        plainDeps.forEach(function (d) {
+          var chip = depChip(d, null, null);
+          if (chip) deps.appendChild(chip);
         });
         dsec.appendChild(deps);
         details.appendChild(dsec);
+      }
+
+      if (seamDeps.length) {
+        var ssec = el("div", "d-section");
+        ssec.appendChild(el("h3", null, "Seams"));
+        var sdeps = el("div", "deps");
+        seamDeps.forEach(function (d) {
+          var target = nodeById[d.to];
+          if (!target) return;
+          var text = (d.label ? d.label.toUpperCase() + " → " : "") + target.label;
+          var chip = depChip(d.to, text, "dep-chip-seam s-seam");
+          if (chip) sdeps.appendChild(chip);
+        });
+        ssec.appendChild(sdeps);
+        details.appendChild(ssec);
       }
     }
 
@@ -737,7 +779,7 @@
         var on = id && (n.id === id || adj[id][n.id]);
         nodeEls[n.id].classList.toggle("hi", !!on);
       });
-      var paths = svg.querySelectorAll(".edge");
+      var paths = svg.querySelectorAll(".edge, .edge-label");
       for (var i = 0; i < paths.length; i++) {
         var p = paths[i];
         var on = id && (p.getAttribute("data-from") === id || p.getAttribute("data-to") === id);
@@ -794,13 +836,29 @@
         }
 
         var path = document.createElementNS(svgNS, "path");
-        path.setAttribute("class", "edge");
+        path.setAttribute("class", "edge" + (e.kind === "seam" ? " seam" : ""));
         path.setAttribute("data-from", e.from);
         path.setAttribute("data-to", e.to);
         path.setAttribute("d",
           "M " + sx + " " + sy + " C " + c1x + " " + c1y + ", " +
           c2x + " " + c2y + ", " + ex + " " + ey);
         svg.appendChild(path);
+
+        // A labelled edge gets its text at the cubic's midpoint (t = 0.5).
+        if (e.label) {
+          var mx = (sx + 3 * c1x + 3 * c2x + ex) / 8;
+          var my = (sy + 3 * c1y + 3 * c2y + ey) / 8;
+          var t = document.createElementNS(svgNS, "text");
+          t.setAttribute("class", "edge-label" + (e.kind === "seam" ? " seam" : ""));
+          t.setAttribute("x", mx);
+          t.setAttribute("y", my);
+          t.setAttribute("text-anchor", "middle");
+          t.setAttribute("dominant-baseline", "middle");
+          t.setAttribute("data-from", e.from);
+          t.setAttribute("data-to", e.to);
+          t.textContent = e.label;
+          svg.appendChild(t);
+        }
       });
 
       // Re-apply any live hover/focus highlight to the freshly-created paths.
