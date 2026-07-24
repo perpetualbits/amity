@@ -168,7 +168,7 @@ window.PROJECT_MAP = {
         { label: "Capture endpoint (POST /inbox)", status: "done", desc: "Generates id + timestamp, inserts, returns the item." },
         { label: "Recent query (GET /inbox/recent)", status: "done", desc: "N most-recent items; default 20, capped 100." },
         { label: "Non-touch sources", status: "seam", desc: "Voice / mobile / share / forward-email exist in the enum; only touch is wired." },
-        { label: "Triage to typed entity", status: "seam", desc: "Task exists as a triage target and Event is planned, but TypedEntityRef is still a \"type:uuid\" string placeholder — the seams are drawn, the flow isn't built." },
+        { label: "Triage to typed entity", status: "seam", desc: "Task exists as a triage target; Event and Project are planned. TypedEntityRef is still a \"type:uuid\" string placeholder — the seams are drawn, the flow isn't built." },
       ],
       // Triage edges are typed "seam" dependencies: the inbox does not depend on
       // these entities, it *becomes* one when triaged. Each renders as a dashed,
@@ -178,6 +178,7 @@ window.PROJECT_MAP = {
         "api",
         { to: "task", kind: "seam", label: "triage" },
         { to: "event", kind: "seam", label: "triage" },
+        { to: "project", kind: "seam", label: "triage" },
       ],
     },
     {
