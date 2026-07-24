@@ -68,6 +68,8 @@ pub fn build_app(db: SqlitePool) -> Router {
             "/api/v1/tasks/{id}/history",
             get(api::task::get_task_history),
         )
+        // Surfacing — the ranked "what's on today" query feeding the Today view.
+        .route("/api/v1/surfacing/today", get(api::surfacing::today))
         // Attach tracing middleware so every request is logged automatically.
         // `TraceLayer` produces structured spans (method, path, status, latency).
         .layer(TraceLayer::new_for_http())

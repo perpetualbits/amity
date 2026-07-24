@@ -18,6 +18,8 @@
 //   POST  /api/v1/tasks/{id}/skip        — mark skipped
 //   POST  /api/v1/tasks/{id}/assignee    — change current_assignee_id
 //   GET   /api/v1/tasks/{id}/history     — list completion log entries
+//   GET   /api/v1/surfacing/today        — ranked "what's on today" query
 
 pub mod inbox;
+pub mod surfacing;
 pub mod task;
