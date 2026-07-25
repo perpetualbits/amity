@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
-# comment-density.sh — audit the comment density of one or more Rust source files.
+# comment-density.sh — audit the comment density of Rust *production* code.
 #
 # Usage:
 #   scripts/comment-density.sh <file> [<file> ...]
 #   scripts/comment-density.sh crates/amity-core/src/inbox.rs
 #
 # Exit codes:
-#   0  All files meet the ≥50% threshold.
+#   0  All checked files meet the ≥50% threshold (or were skipped as test code).
 #   1  One or more files are below threshold or an argument error occurred.
 #
-# What counts as a comment line:
+# Scope — TEST CODE IS NOT GATED:
+#   The density target is about keeping production code well-explained. Test code
+#   is verbose by nature (fixtures, table cases, assertions) and gating it pushes
+#   toward padding rather than better comments, so two kinds of test code are
+#   excluded from the measurement:
+#     • Integration-test files — any path under a `tests/` directory is skipped
+#       entirely (the whole file is a test crate).
+#     • Unit-test modules — a `#[cfg(test)]` block (the conventional
+#       `#[cfg(test)] mod tests { … }`, or a `#[cfg(test)]` item) is stripped
+#       from a source file before its lines are counted.
+#
+# What counts as a comment line (in the remaining production lines):
 #   Lines that, after stripping leading whitespace, start with // or ///.
 #   Block comments (/* ... */) are not counted — they are rare in this codebase
-#   and handling multi-line blocks correctly in bash is error-prone. If block
-#   comments are needed, this script should be replaced with a proper Rust tool.
+#   and handling multi-line blocks correctly in bash is error-prone.
 #
 # What counts as a code line:
-#   Non-empty, non-blank lines that are not comment lines.
+#   Non-empty, non-blank production lines that are not comment lines.
 #
 # The 50% target means: comment_lines / (comment_lines + code_lines) >= 0.5
 # Blank lines are excluded from both counts — they carry no information either way.
@@ -43,22 +53,42 @@ for file in "$@"; do
         continue
     fi
 
-    # Count comment lines: strip leading whitespace, check for // prefix.
-    comment_lines=$(grep -cE '^\s*//' "$file" || true)
+    # Integration-test files live under a `tests/` directory and are entirely
+    # test code; they are not gated. Report and move on.
+    if [[ "$file" == */tests/* ]]; then
+        echo "SKIP  $file  (integration test file)"
+        continue
+    fi
 
-    # Count blank lines so we can subtract them from total.
-    blank_lines=$(grep -cE '^\s*$' "$file" || true)
+    # One awk pass counts comment and code lines while skipping any `#[cfg(test)]`
+    # block, so unit tests do not count toward the ratio. Brace depth is tracked
+    # from the attribute's following item (a `mod` or `fn`) until it closes.
+    # This relies on the codebase convention that `#[cfg(test)]` introduces a
+    # braced item — which is true throughout (`#[cfg(test)] mod tests { … }`).
+    read -r comment_lines code_lines < <(awk '
+        # A #[cfg(test)] attribute starts a test block we skip entirely.
+        /^[[:space:]]*#\[cfg\(test\)\]/ { in_test = 1; depth = 0; started = 0; next }
+        in_test {
+            # Count braces on this line to find where the test item closes.
+            opens = gsub(/\{/, "&"); closes = gsub(/\}/, "&");
+            depth += opens - closes;
+            if (opens > 0) started = 1;
+            # Once we have opened and returned to depth 0, the block is done.
+            if (started && depth <= 0) in_test = 0;
+            next
+        }
+        # Production comment line (// or ///).
+        /^[[:space:]]*\/\// { comment++; next }
+        # Blank line — ignored by both counts.
+        /^[[:space:]]*$/ { next }
+        # Anything else is a production code line.
+        { code++ }
+        END { printf "%d %d\n", comment + 0, code + 0 }
+    ' "$file")
 
-    total_lines=$(wc -l < "$file")
-
-    # Code lines = total - blank - comment.
-    # The arithmetic uses bash integer arithmetic; no floating point needed here
-    # because we compare percentages as integers (multiply by 100 before dividing).
-    code_lines=$(( total_lines - blank_lines - comment_lines ))
-
-    # Guard against a file that is entirely comments or entirely blank.
+    # Guard against a file with no production lines (e.g. all test code).
     if [[ $(( comment_lines + code_lines )) -eq 0 ]]; then
-        echo "SKIP  $file (no non-blank lines)"
+        echo "SKIP  $file  (no non-blank production lines)"
         continue
     fi
 
