@@ -7,72 +7,85 @@
 // an escalating colour (brief §3, §11).
 //
 // The brief (§6.4) describes surfacing as a single ranked query across Event,
-// Task, Project milestones, and Thread prompts. Only Task exists today, so this
-// module ranks over Tasks alone — behind a `SurfacedKind` enum that is the seam
-// for the other entity types. Nothing here does I/O; the service layer gathers
-// the candidates from storage and hands them in.
+// Task, Project milestones, and Thread prompts. It now ranks two kinds — Task
+// and Event — behind a `SurfacedKind` enum that admits the rest later. Nothing
+// here does I/O; the service layer gathers the candidates from storage and
+// hands them in.
+//
+// The rule is deliberately kind-agnostic. Each candidate carries a `Liveness`
+// (set by the caller) rather than a Task-specific status, so the same rule
+// serves both kinds: a task is live while Open/Doing and settled once
+// Done/Skipped; an event is live until it has passed. Ordering leads with
+// all-day items (the wall-calendar banner), then by time, then priority, then a
+// stable id tiebreak.
 //
 // The "surfaces on today" rule (ratified with the maintainer):
-//   • a materialised recurring instance surfaces on its scheduled day; and
+//   • a materialised recurring instance (or an event) surfaces on its own day;
 //   • a one-shot task surfaces if its window intersects the day, OR it is still
-//     open and its deadline has already passed (overdue-open).
-// A task with no temporal anchor at all makes no claim on today and stays quiet
-// — the empty state is a designed state, and Amity errs toward silence.
-//
-// Ordering, once the set is chosen, is by time proximity first (the earliest
-// salient instant leads), then by priority as a tiebreak, then by source id so
-// the order is fully deterministic. Priority never lets an important task jump
-// ahead of an earlier one — it only settles exact ties.
-//
-// `SurfacingConfig` carries the levers that shape *what* surfaces beyond the raw
-// temporal rule. Today only the per-person "my today" filter is live; quiet
-// hours and Presence-based filtering are named as seams for when the member and
-// Presence entities exist.
+//     open and its deadline has already passed (overdue-open);
+//   • an event surfaces on its start date and is never "overdue" — it happens or
+//     it has passed (a passed event simply drops off).
+// A candidate with no temporal anchor makes no claim on today and stays quiet —
+// the empty state is a designed state, and Amity errs toward silence.
 
 // Serde derives let `SurfacedItem` cross the JSON API boundary unchanged.
 use serde::{Deserialize, Serialize};
 // `Date` is the day we surface for; `OffsetDateTime` is the salient instant.
 use time::{Date, OffsetDateTime};
 
-// Typed IDs for the source entity and the displayed assignee.
-use crate::ids::{MemberId, TaskId};
-// Priority orders items within a day; TaskStatus decides what is still live.
-use crate::task::{Priority, TaskStatus};
+// `MemberId` is the displayed assignee; `Priority` orders items within a day.
+use crate::ids::MemberId;
+use crate::task::Priority;
 
 // ─── SurfacedKind ───────────────────────────────────────────────────────────
 
 /// The entity type a surfaced item came from.
 ///
-/// Only `Task` exists today. The enum is the honest seam for the other
-/// surfacable types named in brief §6.4 — Event, Project milestones, Thread
-/// prompts — so the Today view renders a mixed-type list from day one and the
-/// wire shape does not change when they arrive.
+/// `Task` and `Event` are live today; the remaining surfacable types named in
+/// brief §6.4 — Project milestones, Thread prompts — join here later without a
+/// change to the wire shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SurfacedKind {
-    /// The item is a household Task (or a materialised instance of one).
+    /// A household Task (or a materialised instance of one).
     Task,
+    /// A calendar Event (native, or a read-only external one).
+    Event,
+}
+
+// ─── Liveness ───────────────────────────────────────────────────────────────
+
+/// Whether a candidate is still worth surfacing, independent of its kind.
+///
+/// The caller maps its own status onto this: a task is `Live` while Open/Doing
+/// and `Settled` once Done/Skipped; an event is `Live` until it has passed.
+/// Keeping the rule on this flag — not on `TaskStatus` — is what lets one rule
+/// serve every kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    /// Still open / upcoming — eligible to surface.
+    Live,
+    /// Resolved / finished — never surfaces.
+    Settled,
 }
 
 // ─── Timing ─────────────────────────────────────────────────────────────────
 
 /// The temporal anchor a candidate carries into the surfacing rule.
 ///
-/// A recurring task contributes `Scheduled` instances (one per materialised
-/// day); a one-shot task contributes a single `Window`. Keeping these distinct
-/// lets the rule treat a fixed occurrence differently from an open window
-/// without the caller having to pre-flatten them.
+/// A recurring task instance and an event both use `Scheduled` (a fixed
+/// occurrence that surfaces on its own day); a one-shot task uses `Window`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Timing {
-    /// A materialised recurring instance scheduled for a specific instant.
+    /// A fixed occurrence at a specific instant (recurring instance, or event).
     ///
-    /// It surfaces only on its own day — missed prior instances are a
-    /// `CompletionLog` concern the pure rule cannot see (see the module TODO).
+    /// Surfaces only on its own day; never overdue. Missed prior instances are
+    /// a `CompletionLog` concern the pure rule cannot see (see the module TODO).
     Scheduled(OffsetDateTime),
 
     /// A one-shot task's window: earliest meaningful start and latest due time.
     ///
-    /// Either bound may be absent. `None`/`None` is a task with no temporal
+    /// Either bound may be absent. `None`/`None` is a candidate with no temporal
     /// claim on any day; it never surfaces on Today.
     Window {
         /// Earliest time the task is meaningful to work on, if any.
@@ -86,31 +99,35 @@ pub enum Timing {
 
 /// One thing that *might* surface on a given day, before the rule is applied.
 ///
-/// The service layer builds these by joining Task rows with their materialised
-/// instances; the pure rule decides which ones actually surface and in what
-/// order. This type is deliberately decoupled from both `Task` and the storage
-/// `TaskInstance` so the ranking logic depends on neither.
+/// The service layer builds these from Task rows, their instances, and Event
+/// rows; the pure rule decides which actually surface and in what order. The
+/// type is decoupled from the concrete entities (the id is a plain string) so
+/// the ranking logic depends on none of them.
 #[derive(Debug, Clone)]
 pub struct SurfaceCandidate {
-    /// Which entity type this came from. `Task` for now.
+    /// Which entity type this came from.
     pub kind: SurfacedKind,
 
-    /// The source Task's id (the parent task, for recurring instances).
-    pub source_id: TaskId,
+    /// The source entity's id as a string (a task or event UUID).
+    pub source_id: String,
 
     /// One-line title, shown verbatim in the Today view.
     pub title: String,
 
-    /// The source task's lifecycle status. `Done`/`Skipped` never surface.
-    pub status: TaskStatus,
+    /// Whether this is still worth surfacing (see [`Liveness`]).
+    pub liveness: Liveness,
 
     /// The temporal anchor that decides whether this lands on the day.
     pub timing: Timing,
 
-    /// Soft importance rank, used only to break ties within a day.
+    /// True for an all-day event; such items lead the day and show "all day".
+    pub all_day: bool,
+
+    /// Soft importance rank, used only to break ties within a day. `None` for
+    /// events, which carry no priority.
     pub priority: Option<Priority>,
 
-    /// The member shown as responsible. May be `None` (no default assignee).
+    /// The member shown as responsible. May be `None`.
     pub current_assignee_id: Option<MemberId>,
 }
 
@@ -118,34 +135,33 @@ pub struct SurfaceCandidate {
 
 /// A candidate that surfaced, in the uniform shape the Today view renders.
 ///
-/// This is the wire type returned by `GET /api/v1/surfacing/today`. It carries
-/// the salient instant used for ordering and display, and an `overdue` flag so
-/// the frontend can say "due earlier" as information — never a red badge or a
-/// count of how late the task is (brief §3, §11).
+/// This is the wire type behind `GET /api/v1/surfacing/today`. It carries the
+/// salient instant used for ordering and display, and an `overdue` flag the
+/// frontend renders as plain information — never a red badge or a lateness
+/// count (brief §3, §11).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurfacedItem {
     /// The entity type this item came from.
     pub kind: SurfacedKind,
 
-    /// The source Task's id (parent task for a recurring instance).
-    pub source_id: TaskId,
+    /// The source entity's id (a task or event UUID string).
+    pub source_id: String,
 
     /// One-line title, shown verbatim.
     pub title: String,
 
-    /// The source task's lifecycle status (always `Open` or `Doing` here).
-    pub status: TaskStatus,
-
     /// The salient instant: the scheduled time, or the due/earliest time.
     ///
-    /// Used both for ordering within the day and for display ("this morning").
+    /// Used for ordering within the day and for display ("this morning").
     pub at: OffsetDateTime,
 
     /// True when the item surfaced because it is open past its deadline.
     ///
-    /// The frontend renders this as plain information. Amity does not shade
-    /// overdue items in a threatening colour or accumulate guilt-debt.
+    /// Only tasks are ever overdue; events are never flagged this way.
     pub overdue: bool,
+
+    /// True for an all-day event; the frontend shows "all day" instead of a time.
+    pub all_day: bool,
 
     /// Soft importance rank, carried through for display and secondary ordering.
     pub priority: Option<Priority>,
@@ -165,9 +181,11 @@ pub struct SurfacedItem {
 pub struct SurfacingConfig {
     /// When set, keep only items whose current assignee is this member.
     ///
-    /// This is the "my today" filter. With the placeholder member it is mostly
-    /// forward-looking, but the logic is real and tested. `None` surfaces the
-    /// whole household's day.
+    /// This is the "my today" filter. `None` surfaces the whole household's day.
+    /// With only the placeholder member today it is mostly forward-looking, but
+    /// the logic is real and tested — it is what a per-person hub view will use
+    /// once members exist. Applied after the temporal rule, so it narrows an
+    /// already-surfaced day rather than changing what counts as "on today".
     pub member_filter: Option<MemberId>,
     // TODO(quiet-hours): suppress non-critical items during a member's quiet
     // hours once member preferences exist (brief §11.3).
@@ -181,7 +199,9 @@ pub struct SurfacingConfig {
 ///
 /// `has_surfaced` is the designed-empty-state signal: when it is `false` the
 /// Today view shows a calm "nothing today" and means it, rather than an error
-/// or a spinner (brief §3, §11.5).
+/// or a spinner (brief §3, §11.5). It is simply whether `items` is non-empty,
+/// carried explicitly so the wire contract states the empty state as a fact the
+/// client can key off, not something it has to infer from an array length.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurfacingResult {
     /// The items that surfaced, ordered for the Today view.
@@ -195,10 +215,16 @@ pub struct SurfacingResult {
 
 /// Rank the candidates that surface on `date`, given the current instant `now`.
 ///
-/// Applies the ratified rule (module docs), filters by `config`, and orders the
-/// survivors by salient time ascending, then priority descending, then source
-/// id for a deterministic tiebreak. Returns the ordered items plus the
-/// empty-state flag.
+/// The pipeline has three filter stages and one sort:
+///   1. drop settled candidates (a task that is Done/Skipped never surfaces);
+///   2. apply the temporal rule per candidate (`evaluate` → `None` off-today);
+///   3. apply the per-person `member_filter`, if the config sets one;
+///   4. order the survivors — all-day first, then by salient time ascending,
+///      then priority descending, then source id for a deterministic tiebreak.
+///
+/// Every stage is a pure predicate or mapping, so the whole function is a pure
+/// transform of its inputs. Returns the ordered items plus the empty-state flag
+/// (`has_surfaced`), which the Today view keys its calm "nothing today" state on.
 #[must_use]
 pub fn rank_today(
     candidates: Vec<SurfaceCandidate>,
@@ -206,27 +232,35 @@ pub fn rank_today(
     now: OffsetDateTime,
     config: &SurfacingConfig,
 ) -> SurfacingResult {
-    // Pipeline: drop resolved tasks, keep only those that surface on the day,
-    // then apply the per-person filter. Each stage is a pure predicate/mapping.
+    // Pipeline: drop settled candidates, keep only those that surface on the
+    // day, then apply the per-person filter. Each stage is a pure predicate.
     let mut items: Vec<SurfacedItem> = candidates
         .into_iter()
-        // Done/Skipped tasks are settled; they never surface.
-        .filter(|c| is_live(c.status))
+        // Settled (Done/Skipped, or otherwise finished) candidates never surface.
+        .filter(|c| c.liveness == Liveness::Live)
         // Evaluate the temporal rule; `None` means "not on today".
         .filter_map(|c| evaluate(c, date, now))
         // "My today": keep only the chosen member's items when a filter is set.
         .filter(|item| member_matches(item, config))
         .collect();
 
-    // Order by time proximity first (earliest salient time wins), then by
-    // priority descending, then by source id so the ordering is deterministic.
+    // Order: all-day items lead the day (the wall-calendar banner), then by time
+    // proximity, then priority descending, then source id for determinism.
+    //
+    // Worked example for one day, the four keys applied in turn:
+    //   1. all-day "king's day"      — all-day, so it leads regardless of time
+    //   2. overdue "renew passport"  — 09:00 yesterday, the earliest salient time
+    //   3. "school run"              — 08:00 today
+    //   4. "call plumber"            — 17:00 today
+    // Two items sharing an instant fall back to priority, then to source id, so
+    // the output is fully deterministic.
     items.sort_by(|a, b| {
-        // Primary key: the earlier salient instant comes first.
-        a.at.cmp(&b.at)
-            // Tiebreak 1: higher priority first (note the reversed operands).
+        // `true` (all-day) must sort before `false`, hence b compared to a.
+        b.all_day
+            .cmp(&a.all_day)
+            .then(a.at.cmp(&b.at))
             .then_with(|| priority_rank(b).cmp(&priority_rank(a)))
-            // Tiebreak 2: source id, purely so equal items sort deterministically.
-            .then_with(|| a.source_id.0.cmp(&b.source_id.0))
+            .then_with(|| a.source_id.cmp(&b.source_id))
     });
 
     // The empty-state signal: false → the Today view says "nothing today".
@@ -239,38 +273,31 @@ pub fn rank_today(
 
 // ─── Private rule helpers ───────────────────────────────────────────────────
 
-/// A task is live (can still surface) only while `Open` or `Doing`.
-///
-/// `Done` and `Skipped` are terminal — surfacing them would turn Today into a
-/// record of the past rather than a view of what still wants attention.
-fn is_live(status: TaskStatus) -> bool {
-    matches!(status, TaskStatus::Open | TaskStatus::Doing)
-}
-
 /// Decide whether a live candidate surfaces on `date`, and build its item.
 ///
 /// Returns `None` when the candidate makes no claim on the day. On success the
-/// salient instant and the overdue flag are already resolved.
+/// salient instant and the overdue flag are already resolved by `timing_on_day`;
+/// this function just projects the candidate into the wire `SurfacedItem`,
+/// moving its owned fields (id, title) rather than cloning them.
 fn evaluate(candidate: SurfaceCandidate, date: Date, now: OffsetDateTime) -> Option<SurfacedItem> {
-    // `timing_on_day` carries all the rule logic; the rest is field-moving.
-    // `?` short-circuits to `None` when the candidate makes no claim on the day.
+    // `timing_on_day` carries all the rule logic; `?` short-circuits to None
+    // when the candidate makes no claim on the day.
     let (at, overdue) = timing_on_day(candidate.timing, date, now)?;
-    // Project the candidate into the wire item. Copy fields carry over directly;
-    // the salient time and overdue flag come from the rule above.
+    // Project the surviving candidate into the wire item. Copy fields carry over
+    // directly; the salient time and overdue flag come from the rule above.
     Some(SurfacedItem {
-        // Entity type — `Task` today, the seam for others later.
+        // Entity type — Task or Event.
         kind: candidate.kind,
-        // The parent task, so the frontend can act on it (complete, reassign).
+        // Move the id/title out of the candidate — no clone needed.
         source_id: candidate.source_id,
-        // Move the title out of the candidate — no clone needed.
         title: candidate.title,
-        // Status is always live here (Done/Skipped were filtered upstream).
-        status: candidate.status,
         // The instant used for ordering and display.
         at,
-        // Whether this surfaced via the overdue-open path.
+        // Whether this surfaced via the overdue-open path (tasks only).
         overdue,
-        // Soft rank, carried through for the ordering tiebreak and display.
+        // All-day flag drives the "all day" label and the lead-the-day ordering.
+        all_day: candidate.all_day,
+        // Soft rank, carried through for the tiebreak and display.
         priority: candidate.priority,
         // The member shown as responsible, if any.
         current_assignee_id: candidate.current_assignee_id,
@@ -279,32 +306,36 @@ fn evaluate(candidate: SurfaceCandidate, date: Date, now: OffsetDateTime) -> Opt
 
 /// Apply the ratified "surfaces on today" rule to one temporal anchor.
 ///
-/// Returns `Some((salient_time, overdue))` if it surfaces, else `None`.
+/// Returns `Some((salient_time, overdue))` if it surfaces, else `None`. The two
+/// timing shapes are handled differently:
+///   • `Scheduled` (a recurring instance or an event) surfaces only when its own
+///     day equals `date`, and is never overdue — a fixed occurrence happens or
+///     it has passed.
+///   • `Window` (a one-shot task) surfaces when open-and-overdue, or when today
+///     falls inside its `[earliest, due]` window; an undated window makes no
+///     claim on any day.
 fn timing_on_day(
     timing: Timing,
     date: Date,
     now: OffsetDateTime,
 ) -> Option<(OffsetDateTime, bool)> {
     match timing {
-        // A materialised recurring instance surfaces only on its own day.
+        // A fixed occurrence (recurring instance or event) surfaces on its day.
         Timing::Scheduled(at) => (at.date() == date).then_some((at, false)),
 
         Timing::Window {
             earliest_at,
             due_by,
         } => match due_by {
-            // With a deadline: overdue-open takes precedence, else it must fall
-            // inside its window. Overdue is only reached for live tasks because
-            // resolved ones were filtered out before `evaluate`.
-            //
-            // Deadline already passed → surfaces overdue, salient time is the due.
+            // Deadline already passed → surfaces overdue; the salient time is due.
+            // Only reached for live candidates (settled ones were filtered out).
             Some(due) if due < now => Some((due, true)),
             // Deadline still ahead and today is in-window → surfaces on time.
             Some(due) if within_window(earliest_at, Some(due), date) => Some((due, false)),
             // Deadline still ahead but today is outside the window → no claim.
             Some(_) => None,
             // No deadline: it surfaces once, on the day its window opens — an
-            // undated task with no start makes no claim on any day.
+            // undated candidate with no start makes no claim on any day.
             None => match earliest_at {
                 Some(start) if start.date() == date => Some((start, false)),
                 _ => None,
@@ -316,7 +347,11 @@ fn timing_on_day(
 /// Whether `date` falls within `[earliest, due]`, treating `None` bounds as open.
 ///
 /// Compared at day granularity: a task is "on today" for the whole of a day its
-/// window overlaps, not only at an exact instant.
+/// window overlaps, not only at an exact instant. So a task with no `earliest`
+/// and a `due` three days out is "on today" every day until then — the window is
+/// the span it is workable in, and surfacing shows it for the whole span. An
+/// absent bound is open on that side (no earliest → workable from the start;
+/// no due → no deadline at all).
 fn within_window(
     earliest: Option<OffsetDateTime>,
     due: Option<OffsetDateTime>,
@@ -331,12 +366,18 @@ fn within_window(
 }
 
 /// Numeric priority for ordering; unset priority ranks lowest.
+///
+/// Only reached as the third sort key, after all-day and time, so it settles
+/// items that share the same salient instant. Events always rank 0 here.
 fn priority_rank(item: &SurfacedItem) -> u8 {
     // No priority set → 0, which sorts behind any explicit 1..=5 rank.
     item.priority.map_or(0, Priority::value)
 }
 
 /// Keep an item when no member filter is set, or when it belongs to that member.
+///
+/// This is the "my today" narrowing. When a member filter is set, an item with
+/// no assignee is dropped — it belongs to nobody's personal day.
 fn member_matches(item: &SurfacedItem, config: &SurfacingConfig) -> bool {
     // No filter → keep everything; a filter → keep only that member's items.
     // Unassigned items are dropped under a filter (they are nobody's "my today").
@@ -355,9 +396,19 @@ mod tests {
     use time::macros::{date, datetime};
 
     // ── Fixtures ─────────────────────────────────────────────────────────────
-    // The suite is deterministic: one fixed day, one fixed `now`, and named
-    // instants around them so each test reads as a small scenario in wall-clock
-    // time rather than a wall of `datetime!` literals.
+    // One fixed day, one fixed `now`, and named instants around it, so each test
+    // reads as a small scenario in wall-clock time. The day's timeline:
+    //
+    //   yesterday 09:00  — a deadline that has already passed (overdue path)
+    //   today    00:00   — the all-day banner anchor
+    //   today    08:00   — morning():  a scheduled time before `now`
+    //   today    12:00   — now():      the current instant
+    //   today    15:00   — afternoon(): later the same day
+    //   today    17:00   — evening():  due later today, still in the future
+    //   tomorrow 08:00   — the next day, which makes no claim on today
+    //
+    // Every fixture below returns one of these fixed instants or a fixed member,
+    // so the whole suite is deterministic regardless of the real wall clock.
 
     /// The placeholder member (matches the UUID inserted by migration 0001).
     fn member() -> MemberId {
@@ -365,7 +416,7 @@ mod tests {
         MemberId(uuid::Uuid::parse_str("00000000-0000-7000-8000-000000000001").unwrap())
     }
 
-    /// A second, distinct member — only the per-person filter test needs it.
+    /// A second, distinct member, used only by the per-person filter test.
     fn other_member() -> MemberId {
         // A different fixed UUID so the "my today" filter has someone to exclude.
         MemberId(uuid::Uuid::parse_str("00000000-0000-7000-8000-000000000002").unwrap())
@@ -385,71 +436,110 @@ mod tests {
 
     /// This morning (08:00 today) — before `now`, a common scheduled time.
     fn morning() -> OffsetDateTime {
-        // Used for on-time same-day instances.
+        // Used for on-time same-day instances and events.
         datetime!(2026-07-24 08:00:00 UTC)
     }
 
     /// This afternoon (15:00 today) — after `now`, later in the same day.
     fn afternoon() -> OffsetDateTime {
         // Used to prove time ordering within the day.
+        // Sorts after `morning` but before `evening`.
         datetime!(2026-07-24 15:00:00 UTC)
     }
 
     /// This evening (17:00 today) — a deadline that is today but still future.
     fn evening() -> OffsetDateTime {
         // Due-later-today: on Today, but not yet overdue.
+        // Later than `now` (12:00), so a task due here is not overdue.
         datetime!(2026-07-24 17:00:00 UTC)
     }
 
     /// Yesterday morning (09:00) — a deadline that has already passed.
     fn yesterday() -> OffsetDateTime {
         // Overdue relative to `now`; the overdue-open path uses this.
+        // A prior-day instant, so a scheduled occurrence here is off-today.
         datetime!(2026-07-23 09:00:00 UTC)
     }
 
     /// Tomorrow morning (08:00) — a scheduled time on the wrong day.
     fn tomorrow() -> OffsetDateTime {
-        // Proves a future instance makes no claim on today.
+        // Proves a future occurrence makes no claim on today.
+        // A next-day instant; `Scheduled` here surfaces on tomorrow, not today.
         datetime!(2026-07-25 08:00:00 UTC)
     }
 
-    /// A recurring instance scheduled at `dt` — terse `Timing::Scheduled` sugar.
+    /// A `Scheduled` timing at `dt` — a recurring instance or an event.
     fn sched(dt: OffsetDateTime) -> Timing {
-        // The recurring path: one materialised occurrence at a fixed instant.
+        // Wrap the instant in the Scheduled variant for terse setup.
+        // Scheduled timings surface only on their own day, never overdue.
         Timing::Scheduled(dt)
     }
 
-    /// A one-shot window with optional `earliest`/`due` bounds.
+    /// A one-shot `Window` timing with optional `earliest`/`due` bounds.
     fn win(earliest: Option<OffsetDateTime>, due: Option<OffsetDateTime>) -> Timing {
         // The one-shot path: an open-ended window the rule intersects with today.
         Timing::Window {
+            // Earliest meaningful start (None = always open before the deadline).
             earliest_at: earliest,
+            // Latest due time (None = no deadline at all).
             due_by: due,
         }
     }
 
-    /// Build a candidate: `Task` kind, assigned to the placeholder member.
-    fn candidate(title: &str, status: TaskStatus, timing: Timing) -> SurfaceCandidate {
-        // Priority defaults to None; the tie-break test overrides it explicitly.
+    /// A fresh, distinct id string for a candidate (uniqueness only).
+    fn some_id() -> String {
+        // A time-ordered UUID keeps ids distinct without a shared counter.
+        // The value is irrelevant to the rule; only its uniqueness matters.
+        uuid::Uuid::now_v7().to_string()
+    }
+
+    /// Build a Task candidate with the given liveness and timing.
+    fn task(title: &str, liveness: Liveness, timing: Timing) -> SurfaceCandidate {
+        // Tasks are never all-day; priority defaults to None; assigned to member.
         SurfaceCandidate {
-            // Everything is a Task in this task's scope.
+            // A task-kind candidate.
             kind: SurfacedKind::Task,
-            // A fresh id per candidate so the deterministic-tiebreak path is real.
-            source_id: TaskId::new(),
-            // The caller supplies the display title.
+            // A distinct id per candidate.
+            source_id: some_id(),
+            // The caller's display title.
             title: title.to_owned(),
-            // The caller supplies the lifecycle status under test.
-            status,
-            // The caller supplies the temporal anchor under test.
+            // The caller's liveness under test.
+            liveness,
+            // The caller's temporal anchor under test.
             timing,
-            // No priority by default; the tie-break test sets one.
+            // Tasks never surface as all-day.
+            all_day: false,
+            // No priority unless a test sets one.
             priority: None,
             // Assigned to the placeholder member so the filter test has a subject.
             current_assignee_id: Some(member()),
         }
     }
 
-    /// Rank a batch against the fixed day/now with default config — the common case.
+    /// Build an Event candidate at `timing`; `all_day` marks a banner event.
+    fn event(title: &str, timing: Timing, all_day: bool) -> SurfaceCandidate {
+        // Events are always Live, carry no priority, and have no assignee here.
+        SurfaceCandidate {
+            // An event-kind candidate.
+            kind: SurfacedKind::Event,
+            // A distinct id per candidate.
+            source_id: some_id(),
+            // The caller's display title.
+            title: title.to_owned(),
+            // Events are live until they have passed.
+            liveness: Liveness::Live,
+            // The caller's temporal anchor.
+            timing,
+            // Whether this is an all-day banner event.
+            all_day,
+            // Events carry no priority.
+            priority: None,
+            // No assignee on events in these tests.
+            current_assignee_id: None,
+        }
+    }
+
+    /// Rank a batch against the fixed day/now with default config.
     fn rank(candidates: Vec<SurfaceCandidate>) -> SurfacingResult {
         // Every test funnels through this call so the day and now stay consistent.
         rank_today(candidates, today(), now(), &SurfacingConfig::default())
@@ -458,6 +548,7 @@ mod tests {
     /// The surfaced titles, in order — the shape the ordering tests assert on.
     fn titles(result: &SurfacingResult) -> Vec<&str> {
         // Collect just the titles so ordering assertions stay readable.
+        // Borrowed &str slices — the ordering is what the assertions check.
         result.items.iter().map(|i| i.title.as_str()).collect()
     }
 
@@ -467,7 +558,6 @@ mod tests {
     fn empty_input_surfaces_nothing() {
         // The designed empty state is a real result, not an error or a spinner:
         // with no candidates the Today view says "nothing today" and means it.
-        // Rank an empty day.
         let result = rank(vec![]);
         // Nothing comes back.
         assert!(result.items.is_empty());
@@ -479,169 +569,171 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_instance_surfaces_on_its_day() {
-        // A recurring instance whose scheduled day is today is the canonical thing
-        // the Today view exists to show — the base case for the whole feature.
-        // One open instance scheduled for this morning.
-        let c = candidate("take out bins", TaskStatus::Open, sched(morning()));
-        // Rank the single-candidate day.
-        let result = rank(vec![c]);
+    fn threshold_rule_decides_what_surfaces() {
+        // The whole "on today" rule as a table of cases, one candidate each:
+        //   (label, liveness, timing, expected-surfaces, expected-overdue).
+        // Each row walks one branch of the rule so the boundary reads at a glance;
+        // a settled candidate is filtered out before the temporal rule even runs.
+        let cases: [(&str, Liveness, Timing, bool, bool); 8] = [
+            // A scheduled instance on today surfaces, not overdue.
+            (
+                "scheduled today",
+                Liveness::Live,
+                sched(morning()),
+                true,
+                false,
+            ),
+            // Tomorrow's instance makes no claim on today.
+            (
+                "scheduled tomorrow",
+                Liveness::Live,
+                sched(tomorrow()),
+                false,
+                false,
+            ),
+            // A one-shot due later today surfaces, not overdue.
+            (
+                "due later today",
+                Liveness::Live,
+                win(None, Some(evening())),
+                true,
+                false,
+            ),
+            // Open past yesterday's deadline → surfaces as information (overdue).
+            (
+                "overdue and live",
+                Liveness::Live,
+                win(None, Some(yesterday())),
+                true,
+                true,
+            ),
+            // Same past deadline but settled → never surfaces.
+            (
+                "overdue but settled",
+                Liveness::Settled,
+                win(None, Some(yesterday())),
+                false,
+                false,
+            ),
+            // Today inside [earliest, due] → surfaces, not overdue.
+            (
+                "inside window",
+                Liveness::Live,
+                win(
+                    Some(datetime!(2026-07-23 00:00:00 UTC)),
+                    Some(datetime!(2026-07-25 23:00:00 UTC)),
+                ),
+                true,
+                false,
+            ),
+            // Window opens next week → nothing today.
+            (
+                "before window opens",
+                Liveness::Live,
+                win(
+                    Some(datetime!(2026-07-28 00:00:00 UTC)),
+                    Some(datetime!(2026-07-30 00:00:00 UTC)),
+                ),
+                false,
+                false,
+            ),
+            // No dates at all → makes no claim on today.
+            ("undated", Liveness::Live, win(None, None), false, false),
+        ];
+        // Run every case through a single-candidate day and check the outcome.
+        for (what, liveness, timing, surfaces, overdue) in cases {
+            // Build and rank a one-candidate day for this case (kind irrelevant).
+            let result = rank(vec![task(what, liveness, timing)]);
+            // The surfaced count and the empty-state flag must match expectation.
+            assert_eq!(
+                result.items.len(),
+                usize::from(surfaces),
+                "surfaces: {what}"
+            );
+            assert_eq!(result.has_surfaced, surfaces, "flag: {what}");
+            // When it surfaces, the overdue flag must match too.
+            if surfaces {
+                assert_eq!(result.items[0].overdue, overdue, "overdue: {what}");
+            }
+        }
+    }
+
+    // ── Events ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn event_surfaces_on_its_day_and_is_never_overdue() {
+        // An event on today surfaces as an Event-kind item; unlike a task it is
+        // never flagged overdue — it happens or it has passed. This is the base
+        // case that proves the mixed-type seam is real, not just declared.
+        // A timed morning event.
+        let e = event("school run", sched(morning()), false);
+        // Rank the single-event day.
+        let result = rank(vec![e]);
         // Exactly one item comes back.
         assert_eq!(result.items.len(), 1);
-        // The empty-state flag flips true because something surfaced.
-        assert!(result.has_surfaced);
-        // The title is preserved verbatim for display.
-        assert_eq!(result.items[0].title, "take out bins");
-        // A same-day instance is on time, not overdue.
-        assert!(
-            !result.items[0].overdue,
-            "a same-day instance is not overdue"
-        );
-    }
-
-    #[test]
-    fn scheduled_instance_on_another_day_stays_off_today() {
-        // Tomorrow's instance has a real scheduled time — but not today's — so it
-        // must not clutter the current day.
-        // One open instance scheduled for tomorrow morning.
-        let c = candidate("water plants", TaskStatus::Open, sched(tomorrow()));
-        // Rank today's day for it.
-        let result = rank(vec![c]);
-        // A different day means no claim on today.
-        assert!(result.items.is_empty());
-        // And nothing surfaced.
-        assert!(!result.has_surfaced);
-    }
-
-    #[test]
-    fn one_shot_due_today_surfaces() {
-        // A one-shot task whose deadline falls later today is due now and belongs
-        // on Today. The deadline (evening) is still after `now`, so it is not
-        // overdue — an ordinary surfaced item.
-        // One open task due this evening.
-        let c = candidate("call dentist", TaskStatus::Open, win(None, Some(evening())));
-        // Rank the single-candidate day.
-        let result = rank(vec![c]);
-        // It surfaces as one item.
-        assert_eq!(result.items.len(), 1);
-        // And it is not overdue, because the deadline is still ahead.
+        // It is tagged Event, not Task.
+        assert_eq!(result.items[0].kind, SurfacedKind::Event);
+        // And it is never overdue — events are not nagged like open tasks.
         assert!(!result.items[0].overdue);
     }
 
     #[test]
-    fn overdue_open_task_surfaces_as_information() {
-        // A deadline that has already passed, on a task still open, must not
-        // silently disappear — an open loop is exactly what surfacing exists to
-        // hold. It surfaces flagged overdue, which the frontend renders as plain
-        // information ("due earlier"), never a red badge or a count of days late.
-        // One open task whose deadline was yesterday.
-        let c = candidate(
+    fn all_day_event_leads_the_day() {
+        // An all-day event sorts ahead of a timed morning event and even ahead of
+        // an overdue task (yesterday) — like the banner atop a wall calendar, the
+        // day's context reads before its clock-timed entries.
+        // An all-day banner event anchored at local midnight.
+        let banner = event(
+            "king's day",
+            sched(datetime!(2026-07-24 00:00:00 UTC)),
+            true,
+        );
+        // A timed morning event (08:00).
+        let timed = event("dentist", sched(morning()), false);
+        // An overdue but still-live task (yesterday's deadline).
+        let overdue = task(
             "renew passport",
-            TaskStatus::Open,
+            Liveness::Live,
             win(None, Some(yesterday())),
         );
-        // Rank today's day for it.
-        let result = rank(vec![c]);
-        // It must still be present.
-        assert_eq!(
-            result.items.len(),
-            1,
-            "an open overdue task must not vanish"
-        );
-        // And it carries the overdue flag.
-        assert!(result.items[0].overdue, "it must be flagged as overdue");
+        // Pass out of order to prove the sort, not the input order, decides.
+        let result = rank(vec![timed, overdue, banner]);
+        // The all-day banner leads, ahead of the timed and overdue items.
+        assert_eq!(titles(&result)[0], "king's day");
     }
 
     #[test]
-    fn overdue_but_resolved_task_stays_quiet() {
-        // The same past deadline, but the task is Done. Resolved tasks are settled
-        // history, not open loops, so Today stays quiet — the status filter runs
-        // ahead of the temporal rule.
-        // One Done task whose deadline was yesterday.
-        let c = candidate(
-            "renew passport",
-            TaskStatus::Done,
-            win(None, Some(yesterday())),
-        );
-        // Rank today's day for it.
-        let result = rank(vec![c]);
-        // Terminal statuses never surface, overdue or not.
-        assert!(result.items.is_empty(), "resolved tasks never surface");
-    }
-
-    #[test]
-    fn task_inside_its_window_surfaces() {
-        // A one-shot actionable since yesterday and due tomorrow is workable today:
-        // the day sits inside [earliest, due]. It surfaces, and is not overdue
-        // because the deadline is still in the future.
-        // Earliest was yesterday, due is two days out — today is mid-window.
-        let earliest = datetime!(2026-07-23 00:00:00 UTC);
-        let due = datetime!(2026-07-25 23:00:00 UTC);
-        // One open task spanning that window.
-        let c = candidate(
-            "prep sinterklaas",
-            TaskStatus::Open,
-            win(Some(earliest), Some(due)),
-        );
-        // Rank today's day for it.
-        let result = rank(vec![c]);
-        // Present, because today is inside the window.
-        assert_eq!(result.items.len(), 1);
-        // Not overdue, because the deadline is still ahead.
-        assert!(!result.items[0].overdue);
-    }
-
-    #[test]
-    fn task_before_its_window_opens_stays_quiet() {
-        // A task not actionable until next week has a window that opens after
-        // today. Showing it now would be premature nagging, so it stays off Today.
-        // Both bounds are next week.
-        let earliest = datetime!(2026-07-28 00:00:00 UTC);
-        let due = datetime!(2026-07-30 00:00:00 UTC);
-        // One open task whose window has not opened yet.
-        let c = candidate(
-            "book summer camp",
-            TaskStatus::Open,
-            win(Some(earliest), Some(due)),
-        );
-        // Rank today's day for it.
-        let result = rank(vec![c]);
-        // The window opens after today, so nothing surfaces.
-        assert!(result.items.is_empty());
-    }
-
-    #[test]
-    fn undated_task_makes_no_claim_on_today() {
-        // With no earliest, no due, and no schedule, a task has no temporal claim
-        // on any particular day. Amity errs toward silence: it waits to be chosen
-        // rather than surfacing itself onto every day forever.
-        // One open task with a fully-open window.
-        let c = candidate("sort the loft", TaskStatus::Open, win(None, None));
-        // Rank today's day for it.
-        let result = rank(vec![c]);
-        // A someday task stays off Today until it is given a time.
-        assert!(result.items.is_empty(), "an undated task must stay quiet");
+    fn tasks_and_events_rank_together_by_time() {
+        // A task and an event on the same day interleave purely by salient time —
+        // the whole point of the mixed-type seam.
+        // An event at 08:00.
+        let morning_event = event("school run", sched(morning()), false);
+        // A task due at 17:00.
+        let noon_task = task("call plumber", Liveness::Live, win(None, Some(evening())));
+        // Rank the mixed pair.
+        let result = rank(vec![noon_task, morning_event]);
+        // The 08:00 event precedes the 17:00 task deadline, regardless of kind.
+        assert_eq!(titles(&result), vec!["school run", "call plumber"]);
     }
 
     // ── Ordering and filtering ───────────────────────────────────────────────
 
     #[test]
     fn items_are_ordered_by_time_then_priority() {
-        // Ordering is by time proximity first: the earliest salient time leads.
-        // An overdue item (yesterday's deadline) sorts ahead of today's morning
-        // instance, which sorts ahead of the afternoon one. Priority does not
-        // override time here — it only breaks exact ties (see the next test).
-        // Yesterday's deadline: the earliest salient time of the three.
-        let overdue = candidate(
+        // Ordering is by time proximity first (after the all-day lead): an overdue
+        // item (yesterday) sorts ahead of the morning instance, then the afternoon.
+        // Priority is untouched here — it only breaks exact ties (next test).
+        // Yesterday's overdue deadline: the earliest salient time.
+        let overdue = task(
             "overdue thing",
-            TaskStatus::Open,
+            Liveness::Live,
             win(None, Some(yesterday())),
         );
         // This morning's instance: middle.
-        let morning_item = candidate("morning thing", TaskStatus::Open, sched(morning()));
+        let morning_item = task("morning thing", Liveness::Live, sched(morning()));
         // This afternoon's instance: latest.
-        let afternoon_item = candidate("afternoon thing", TaskStatus::Open, sched(afternoon()));
-        // Pass them out of order to prove the sort — not the input order — decides.
+        let afternoon_item = task("afternoon thing", Liveness::Live, sched(afternoon()));
+        // Pass them out of order to prove the sort — not the input — decides.
         let result = rank(vec![afternoon_item, morning_item, overdue]);
         // Earliest salient time first, all the way down.
         assert_eq!(
@@ -652,18 +744,17 @@ mod tests {
 
     #[test]
     fn priority_breaks_ties_at_the_same_time() {
-        // When two items share the exact same salient instant, the higher priority
-        // comes first. This is the only place priority affects order — it never
-        // lets an important task jump ahead of an earlier one.
-        // Both instances are scheduled at the same instant.
+        // Two items at the identical instant: priority is the tiebreak, high first.
+        // This is the only place priority affects order.
+        // Both items share this instant.
         let at = morning();
         // The low-priority one (rank 2).
-        let mut low = candidate("low", TaskStatus::Open, sched(at));
+        let mut low = task("low", Liveness::Live, sched(at));
         low.priority = Some(Priority::new(2).unwrap());
         // The high-priority one (rank 5).
-        let mut high = candidate("high", TaskStatus::Open, sched(at));
+        let mut high = task("high", Liveness::Live, sched(at));
         high.priority = Some(Priority::new(5).unwrap());
-        // Rank the two-item day.
+        // Rank the tied pair.
         let result = rank(vec![low, high]);
         // Higher priority wins the tie.
         assert_eq!(titles(&result), vec!["high", "low"]);
@@ -672,17 +763,15 @@ mod tests {
     #[test]
     fn member_filter_keeps_only_that_members_items() {
         // The "my today" filter narrows the day to one member: only items whose
-        // current assignee matches survive, and everyone else's work is excluded.
-        // With real members this powers per-person views; the logic runs now
-        // against the placeholder member and a second, distinct one.
+        // current assignee matches survive; everyone else's work is excluded.
         // My task (assigned to the placeholder member by default).
-        let mine = candidate("my task", TaskStatus::Open, sched(morning()));
-        // Their task, reassigned to a different member the filter must drop.
-        let mut theirs = candidate("their task", TaskStatus::Open, sched(afternoon()));
+        let mine = task("my task", Liveness::Live, sched(morning()));
+        // A second item reassigned to someone else, which the filter must drop.
+        let mut theirs = task("their task", Liveness::Live, sched(afternoon()));
         theirs.current_assignee_id = Some(other_member());
-        // Filter the day down to the placeholder member: only this member's
-        // items should survive. `member_filter` is the config's one live lever.
+        // Filter the day down to the placeholder member.
         let config = SurfacingConfig {
+            // Only this member's items should survive.
             member_filter: Some(member()),
         };
         // Rank with the filter applied.

@@ -42,10 +42,10 @@ use time::{Date, Duration, OffsetDateTime};
 
 // The pure surfacing rule and its types.
 use amity_core::surfacing::{
-    SurfaceCandidate, SurfacedItem, SurfacedKind, SurfacingConfig, Timing, rank_today,
+    Liveness, SurfaceCandidate, SurfacedItem, SurfacedKind, SurfacingConfig, Timing, rank_today,
 };
-// `Task` is what we assemble candidates from.
-use amity_core::task::Task;
+// `Task` is what we assemble candidates from; `TaskStatus` maps onto `Liveness`.
+use amity_core::task::{Task, TaskStatus};
 // Storage: list all tasks, and list a recurring task's materialised instances.
 use amity_storage::task::{TaskFilter, list_tasks};
 use amity_storage::task_instance::list_upcoming_instances;
@@ -80,12 +80,12 @@ pub struct SurfacedItemResponse {
     pub source_id: String,
     /// One-line title, shown verbatim.
     pub title: String,
-    /// Lifecycle status of the source task (open|doing).
-    pub status: String,
     /// Salient instant (RFC 3339): the scheduled time, or the due/earliest time.
     pub at: String,
-    /// True when the item surfaced because it is open past its deadline.
+    /// True when the item surfaced because it is open past its deadline (tasks).
     pub overdue: bool,
+    /// True for an all-day event; the client shows "all day" instead of a time.
+    pub all_day: bool,
     /// Importance rank 1-5; omitted when not ranked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<u8>,
@@ -197,14 +197,14 @@ async fn build_candidates(
             // ── One-shot task: a single window candidate ────────────────────
             // The rule decides whether today intersects [earliest_at, due_by].
             candidates.push(SurfaceCandidate {
-                // Only Task exists as a surfacable kind today.
+                // A one-shot task candidate.
                 kind: SurfacedKind::Task,
                 // The task's own id — one-shot tasks have no separate instance.
-                source_id: task.id,
+                source_id: task.id.to_string(),
                 // Title shown verbatim in the Today view.
                 title: task.title.clone(),
-                // Status decides liveness in the rule (Done/Skipped are dropped).
-                status: task.status,
+                // Map the task's status onto the kind-agnostic liveness flag.
+                liveness: liveness_of(task.status),
                 // A one-shot carries its window straight into the rule.
                 timing: Timing::Window {
                     // Earliest meaningful start, if any.
@@ -212,6 +212,8 @@ async fn build_candidates(
                     // Latest due time, if any.
                     due_by: task.due_by,
                 },
+                // Tasks are never all-day.
+                all_day: false,
                 // Soft rank for the ordering tiebreak.
                 priority: task.priority,
                 // The member shown as responsible, if set.
@@ -236,16 +238,18 @@ async fn build_candidates(
                 // Keep only the instances scheduled on the target day.
                 if inst.scheduled_at.date() == target_date {
                     candidates.push(SurfaceCandidate {
-                        // The mixed-type seam; Task for now.
+                        // A recurring-task instance candidate.
                         kind: SurfacedKind::Task,
                         // The parent task's id, for client navigation and actions.
-                        source_id: task.id,
+                        source_id: task.id.to_string(),
                         // Title denormalised from the parent so no second fetch is needed.
                         title: task.title.clone(),
-                        // Parent status — a Done series is dropped by the rule.
-                        status: task.status,
+                        // Parent status → liveness; a Done series is dropped by the rule.
+                        liveness: liveness_of(task.status),
                         // A recurring instance surfaces on its scheduled instant.
                         timing: Timing::Scheduled(inst.scheduled_at),
+                        // Tasks are never all-day.
+                        all_day: false,
                         // Soft rank from the parent task.
                         priority: task.priority,
                         // Prefer the instance's assignee; fall back to the task's.
@@ -265,18 +269,18 @@ async fn build_candidates(
 /// Project a ranked `SurfacedItem` into its JSON response shape.
 fn surfaced_item_to_response(item: &SurfacedItem) -> SurfacedItemResponse {
     SurfacedItemResponse {
-        // Only Task exists today; the helper keeps the mapping in one place.
+        // The kind string ("task" / "event"); the helper keeps it in one place.
         kind: kind_to_str(item.kind).to_owned(),
-        // UUID newtypes render as hyphenated strings.
-        source_id: item.source_id.to_string(),
+        // The id is already a string on the surfaced item.
+        source_id: item.source_id.clone(),
         // Title is shown verbatim.
         title: item.title.clone(),
-        // TaskStatus::Display gives the snake_case string.
-        status: item.status.to_string(),
         // RFC 3339 for the salient instant; formatting a valid datetime never fails.
         at: item.at.format(&Rfc3339).unwrap_or_default(),
         // Carry the overdue flag straight through.
         overdue: item.overdue,
+        // All-day flag drives the "all day" label and the lead-the-day ordering.
+        all_day: item.all_day,
         // Priority newtype → its inner 1-5 value, or omitted when unset.
         priority: item.priority.map(amity_core::task::Priority::value),
         // Assignee UUID string, or omitted when unset.
@@ -284,11 +288,26 @@ fn surfaced_item_to_response(item: &SurfacedItem) -> SurfacedItemResponse {
     }
 }
 
-/// Map a `SurfacedKind` to its wire string. Centralised for the future seam.
+/// Map a `SurfacedKind` to its wire string.
 fn kind_to_str(kind: SurfacedKind) -> &'static str {
     match kind {
-        // The only variant today; Event/Project/Thread join here later.
+        // Household task or task instance.
         SurfacedKind::Task => "task",
+        // Calendar event (Project/Thread join here later).
+        SurfacedKind::Event => "event",
+    }
+}
+
+/// Map a task's lifecycle status onto the kind-agnostic surfacing liveness.
+///
+/// Open and Doing are live and can surface; Done and Skipped are settled and
+/// never surface. Events do not use this — they are always live until passed.
+fn liveness_of(status: TaskStatus) -> Liveness {
+    match status {
+        // Still actionable → eligible to surface.
+        TaskStatus::Open | TaskStatus::Doing => Liveness::Live,
+        // Resolved → filtered out by the rule.
+        TaskStatus::Done | TaskStatus::Skipped => Liveness::Settled,
     }
 }
 

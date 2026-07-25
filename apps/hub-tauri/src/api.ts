@@ -23,12 +23,12 @@ export interface InboxItem {
 
 /** One item on the Today view. `at` is an RFC 3339 instant. */
 export interface SurfacedItem {
-  kind: string;
+  kind: string; // "task" | "event"
   source_id: string;
   title: string;
-  status: string;
   at: string;
   overdue: boolean;
+  all_day: boolean;
   priority?: number;
   current_assignee_id?: string;
 }
