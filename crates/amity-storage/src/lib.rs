@@ -41,6 +41,23 @@ pub mod completion_log;
 /// used by the recurrence materialisation background job.
 pub mod task_instance;
 
+/// Repository functions for [`amity_core::event::Event`].
+///
+/// Exposes insert, fetch, list (by start time), and update. The `EventSource`
+/// is flattened onto the row and reassembled on read.
+pub mod event;
+
+/// Repository functions for materialised `event_instances` rows.
+///
+/// Bulk upsert, upcoming-instances query, and pruning/deletion helpers — the
+/// event counterpart to `task_instance`.
+pub mod event_instance;
+
+/// Repository functions for [`amity_core::event_override::EventOverride`].
+///
+/// Insert an overlay, and list a day's overlays for the surfacing layer to apply.
+pub mod event_override;
+
 // Re-export the error type at the crate root so callers only need one import.
 pub use error::StorageError;
 
