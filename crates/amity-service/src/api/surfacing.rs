@@ -8,15 +8,17 @@
 // candidates* from storage, hand them to the rule, and serialise the result:
 //
 //   1. Resolve the target day (?date=…, else today in UTC).
-//   2. Load every task; one-shot tasks become a Window candidate, recurring
-//      tasks contribute a Scheduled candidate per materialised instance on the
-//      day. (The pure rule drops resolved/undated ones — we do not pre-filter.)
+//   2. Load tasks AND events. One-shot tasks become a Window candidate; recurring
+//      tasks a Scheduled candidate per instance; one-shot events a Scheduled
+//      candidate on their start date; recurring events one per instance, minus
+//      any instance with a Cancel override. (The pure rule drops resolved/undated
+//      tasks — we do not pre-filter.)
 //   3. Rank via `rank_today` and return a uniform, type-tagged item list plus
 //      the `has_surfaced` empty-state flag.
 //
 // The response shape is `SurfacedKind`-tagged so the Today view renders a
-// mixed-type list from day one; only Task feeds it today (Event/Project/Thread
-// are the seam). Overdue items carry a flag the frontend renders as plain
+// mixed-type list. Task and Event both feed it now; Project/Thread are the
+// remaining seam. Overdue items carry a flag the frontend renders as plain
 // information — never a lateness count (brief §3, §11).
 //
 // Error handling matches api/task.rs:
@@ -46,9 +48,17 @@ use amity_core::surfacing::{
 };
 // `Task` is what we assemble candidates from; `TaskStatus` maps onto `Liveness`.
 use amity_core::task::{Task, TaskStatus};
-// Storage: list all tasks, and list a recurring task's materialised instances.
+// Storage: tasks and their instances; events, their instances, and overrides.
+use amity_storage::event::list_events;
+use amity_storage::event_instance::list_upcoming_event_instances;
+use amity_storage::event_override::list_overrides_on_date;
 use amity_storage::task::{TaskFilter, list_tasks};
 use amity_storage::task_instance::list_upcoming_instances;
+// Event override action (to detect cancellations) and the event id type.
+use amity_core::event_override::OverrideAction;
+use amity_core::ids::EventId;
+// A set of cancelled event ids for the day.
+use std::collections::HashSet;
 
 // `AppState` carries the shared `SqlitePool`.
 use crate::AppState;
@@ -69,14 +79,16 @@ pub struct TodayQuery {
 
 /// JSON shape of one surfaced item.
 ///
-/// Uniform across entity types: `kind` names the source (only `"task"` today),
-/// and the salient instant `at` plus the `overdue` flag are already resolved by
-/// the ranking rule. Optional fields are omitted from the body when absent.
+/// Uniform across entity types: `kind` names the source (`"task"` or `"event"`),
+/// and the salient instant `at` plus the `overdue` and `all_day` flags are
+/// already resolved by the ranking rule. Optional fields (priority, assignee)
+/// are omitted from the body when absent.
 #[derive(Debug, Serialize)]
 pub struct SurfacedItemResponse {
-    /// The source entity type — `"task"` for now (the mixed-type seam).
+    /// The source entity type — `"task"` or `"event"` (the mixed-type seam).
     pub kind: String,
-    /// UUID string of the source task (the parent, for a recurring instance).
+    /// UUID string of the source task or event (the parent, for a recurring
+    /// instance) — used for client navigation and the mark-done/override actions.
     pub source_id: String,
     /// One-line title, shown verbatim.
     pub title: String,
@@ -112,11 +124,16 @@ pub struct TodayResponse {
 
 /// `GET /api/v1/surfacing/today` — the ranked "what's on today" query.
 ///
-/// Assembles candidates from storage, ranks them with the pure rule, and returns
-/// the ordered items plus the empty-state flag.
+/// Assembles task and event candidates from storage, ranks them with the pure
+/// rule, and returns the ordered mixed-type items plus the empty-state flag.
+/// This is the one endpoint the Today view calls; everything a household member
+/// sees at rest flows through here.
+///
+/// A task-list read failure is fatal (500); an event read failure is not — the
+/// event contribution degrades to empty so the day still shows its tasks.
 ///
 /// Returns HTTP 400 if `date` is present but not `YYYY-MM-DD`.
-/// Returns HTTP 500 on an unexpected storage failure.
+/// Returns HTTP 500 on an unexpected task-storage failure.
 pub async fn today(
     State(state): State<AppState>,
     Query(params): Query<TodayQuery>,
@@ -138,7 +155,8 @@ pub async fn today(
     };
 
     // Load every task. The pure rule drops resolved (Done/Skipped) and undated
-    // ones, so there is no need to pre-filter by status here.
+    // ones, so there is no need to pre-filter by status here. Unlike events, a
+    // task-list read failure is fatal to the request.
     let tasks = match list_tasks(&state.db, &TaskFilter::default()).await {
         Ok(t) => t,
         // A failure to read tasks is unexpected — log it and return 500.
@@ -148,14 +166,21 @@ pub async fn today(
         }
     };
 
-    // Turn the tasks (and their instances) into ranking candidates.
-    let candidates = build_candidates(&state, &tasks, target_date).await;
+    // Turn tasks and events into one mixed-type candidate set. Both kinds flow
+    // through the same ranking rule; events simply carry Event-kind timing. The
+    // two builders are independent, so the order they are appended does not
+    // matter — the rule re-sorts the whole set.
+    let mut candidates = build_task_candidates(&state, &tasks, target_date).await;
+    candidates.extend(build_event_candidates(&state, target_date).await);
 
-    // Rank the day. No member filter yet — the whole household's day surfaces.
+    // Rank the whole mixed set at once. No member filter yet — the whole
+    // household's day surfaces; per-person filtering arrives with members.
     let result = rank_today(candidates, target_date, now, &SurfacingConfig::default());
 
     // Project the ranked items into the wire shape and assemble the envelope.
     // Ordering is already decided by the rule; we only reshape each item here.
+    // Tasks and events share the SurfacedItemResponse shape, so no per-kind
+    // branching is needed at the wire boundary.
     let items = result.items.iter().map(surfaced_item_to_response).collect();
     let body = TodayResponse {
         // Echo the resolved day so the client can label the view.
@@ -171,13 +196,15 @@ pub async fn today(
 
 // ─── Candidate assembly ─────────────────────────────────────────────────────
 
-/// Build the ranking candidates for `target_date` from the task set.
+/// Build the task ranking candidates for `target_date`.
 ///
-/// One-shot tasks each contribute a single `Window` candidate. Recurring tasks
+/// The task half of the candidate set (events are gathered separately by
+/// `build_event_candidates`). One-shot tasks each contribute a single `Window`
+/// candidate. Recurring tasks
 /// contribute a `Scheduled` candidate per materialised instance that lands on
 /// the day. Denormalises the parent task's title/status/priority onto each
 /// instance so the ranked items render without a second fetch.
-async fn build_candidates(
+async fn build_task_candidates(
     state: &AppState,
     tasks: &[Task],
     target_date: Date,
@@ -262,6 +289,123 @@ async fn build_candidates(
 
     // The rule sorts and filters; we just hand it the full candidate set.
     candidates
+}
+
+/// Build the event ranking candidates for `target_date`.
+///
+/// A one-shot event contributes a candidate on its start date; a recurring event
+/// contributes one per materialised instance on the day. Any event with a
+/// `Cancel` override for the day is dropped entirely. Events use `Scheduled`
+/// timing (they surface on their day and are never overdue) and carry the
+/// all-day flag through so all-day events lead the day.
+///
+/// Only Cancel overrides are applied here (they drop the instance). Reschedule
+/// and annotate overrides are recorded but not yet reflected — the overlay rows
+/// exist; applying them to surfacing (moving the time, attaching a note) is a
+/// bounded follow-up, documented in `docs/task_4_event_and_calendar.md`.
+///
+/// A storage read failure degrades to an empty event contribution rather than
+/// failing the whole surfacing query, so tasks still surface if events cannot
+/// be loaded — the Today view should never go blank over a partial failure.
+async fn build_event_candidates(state: &AppState, target_date: Date) -> Vec<SurfaceCandidate> {
+    // Load the full event set; a read failure yields an empty day rather than a
+    // 500 for the whole surfacing query (tasks may still have surfaced).
+    let events = match list_events(&state.db).await {
+        // Got the events.
+        Ok(e) => e,
+        // A read failure here degrades gracefully to no events.
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list events for surfacing");
+            return Vec::new();
+        }
+    };
+
+    // Load the day's overrides once. A read failure degrades to "no overrides"
+    // rather than failing the request — worst case a cancelled event still shows.
+    let overrides = list_overrides_on_date(&state.db, target_date)
+        .await
+        .unwrap_or_default();
+    // A Cancel override for the day hides that event's instance entirely; collect
+    // the cancelled event ids so the loop below can skip them in one lookup.
+    let cancelled: HashSet<EventId> = overrides
+        .iter()
+        .filter(|o| o.action == OverrideAction::Cancel)
+        .map(|o| o.source_event_id)
+        .collect();
+
+    // Lower bound for the per-event instance query, mirroring the task path.
+    // Two days back so a local-midnight instance that lands in the prior UTC day
+    // (for a positive offset) is still fetched, then filtered by date — the same
+    // trick the task path uses.
+    let lower_bound = target_date.midnight().assume_utc() - Duration::days(2);
+
+    // Accumulate event candidates across the whole event set.
+    // Accumulate one or more candidates per surviving event.
+    let mut candidates: Vec<SurfaceCandidate> = Vec::new();
+    for event in &events {
+        // A cancel override for the day hides the event's instance entirely, so
+        // skip the whole event before building any candidate for it.
+        if cancelled.contains(&event.id) {
+            continue;
+        }
+        if event.recurrence.is_none() {
+            // One-shot event: surfaces if its start instant falls on the day.
+            if event.start_at.date() == target_date {
+                candidates.push(event_candidate(event, event.start_at));
+            }
+        } else {
+            // Recurring event: one candidate per materialised instance on the day.
+            // Fetch a generous window, then keep only the target-day instances.
+            let instances = match list_upcoming_event_instances(
+                &state.db,
+                event.id,
+                lower_bound,
+                200,
+            )
+            .await
+            {
+                Ok(i) => i,
+                Err(e) => {
+                    tracing::warn!(event_id = %event.id, error = %e, "failed to fetch event instances");
+                    continue;
+                }
+            };
+            // Keep only the instances that land on the target day.
+            for inst in instances {
+                if inst.scheduled_at.date() == target_date {
+                    candidates.push(event_candidate(event, inst.scheduled_at));
+                }
+            }
+        }
+    }
+
+    // The pure rule filters and orders; we hand it the whole event candidate set.
+    candidates
+}
+
+/// Build an Event-kind `SurfaceCandidate` at the given salient instant.
+///
+/// `at` is the event's start (one-shot) or an instance's scheduled time
+/// (recurring). Events carry no priority or assignee and are never overdue, so
+/// the rule orders them purely by time (all-day first).
+fn event_candidate(event: &amity_core::event::Event, at: OffsetDateTime) -> SurfaceCandidate {
+    SurfaceCandidate {
+        // Events are the second surfacable kind (the seam made real).
+        kind: SurfacedKind::Event,
+        // The event's id, for client navigation and the override action.
+        source_id: event.id.to_string(),
+        // Title shown verbatim in the Today view.
+        title: event.title.clone(),
+        // Events are always live until they have passed; there is no Done state.
+        liveness: Liveness::Live,
+        // A fixed occurrence: surfaces on its day, never overdue.
+        timing: Timing::Scheduled(at),
+        // All-day events lead the day; timed ones sort by time.
+        all_day: event.all_day,
+        // Events carry no priority and no assignee.
+        priority: None,
+        current_assignee_id: None,
+    }
 }
 
 // ─── Response mapping and helpers ───────────────────────────────────────────

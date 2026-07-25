@@ -43,6 +43,7 @@ pub fn build_app(db: SqlitePool) -> Router {
     let state = AppState { db };
 
     Router::new()
+        // Routes are grouped by entity; each handler documents its own contract.
         // Inbox endpoints — see api/inbox.rs for handler documentation.
         .route("/api/v1/inbox", post(api::inbox::capture_inbox_item))
         .route("/api/v1/inbox/recent", get(api::inbox::list_recent))
@@ -60,6 +61,7 @@ pub fn build_app(db: SqlitePool) -> Router {
             "/api/v1/tasks/{id}/complete",
             post(api::task::complete_task),
         )
+        // Skip an instance (a first-class completion event, not a deletion).
         .route("/api/v1/tasks/{id}/skip", post(api::task::skip_task))
         .route(
             "/api/v1/tasks/{id}/assignee",
@@ -70,7 +72,19 @@ pub fn build_app(db: SqlitePool) -> Router {
             "/api/v1/tasks/{id}/history",
             get(api::task::get_task_history),
         )
-        // Surfacing — the ranked "what's on today" query feeding the Today view.
+        // Event endpoints — native calendar events and their instance overrides.
+        // Create and list share a path, split by method.
+        .route("/api/v1/events", post(api::event::create_event))
+        .route("/api/v1/events", get(api::event::list_events_handler))
+        // Fetch a single event by id.
+        .route("/api/v1/events/{id}", get(api::event::get_event))
+        // Overlay a cancel/reschedule/annotate on one instance of an event.
+        .route(
+            "/api/v1/events/{id}/override",
+            post(api::event::create_override),
+        )
+        // Surfacing — the one ranked "what's on today" query feeding the Today
+        // view, drawing tasks and events into a single mixed-type list.
         .route("/api/v1/surfacing/today", get(api::surfacing::today))
         // Attach tracing middleware so every request is logged automatically.
         // `TraceLayer` produces structured spans (method, path, status, latency).

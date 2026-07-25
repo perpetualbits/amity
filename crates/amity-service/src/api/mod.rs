@@ -20,6 +20,7 @@
 //   GET   /api/v1/tasks/{id}/history     — list completion log entries
 //   GET   /api/v1/surfacing/today        — ranked "what's on today" query
 
+pub mod event;
 pub mod inbox;
 pub mod surfacing;
 pub mod task;
