@@ -138,18 +138,19 @@ pub async fn list_recent_inbox(limit: u32) -> Result<Vec<InboxItem>, String> {
 /// the service omits them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfacedItem {
-    /// Source entity type — `"task"` for now.
+    /// Source entity type — `"task"` or `"event"`.
     pub kind: String,
-    /// UUID of the source task (used for the complete / reassign actions).
+    /// UUID of the source task or event (used for the complete / reassign
+    /// actions on tasks, and client navigation).
     pub source_id: String,
     /// One-line title, shown verbatim.
     pub title: String,
-    /// Lifecycle status of the source task (open|doing).
-    pub status: String,
     /// Salient instant (RFC 3339): scheduled time, or due/earliest time.
     pub at: String,
-    /// True when the item is open past its deadline.
+    /// True when the item is open past its deadline (tasks only; events never).
     pub overdue: bool,
+    /// True for an all-day event; the hub shows "all day" instead of a time.
+    pub all_day: bool,
     /// Importance rank 1-5; absent when not ranked.
     pub priority: Option<u8>,
     /// UUID of the member shown as responsible; absent when unset.

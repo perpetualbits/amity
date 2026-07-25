@@ -80,6 +80,15 @@ export default function Today() {
   // Load once when the view mounts.
   onMount(load);
 
+  /** True for a task — the only kind that carries the done / reassign actions.
+   * An event simply occurs: it is not "whose turn", so it offers no actions. */
+  const isTask = (item: SurfacedItem) => item.kind === "task";
+
+  /** The time label for an item: an all-day event reads "all day" (its instant
+   * is midnight, which would otherwise show as 00:00); everything else shows
+   * its salient time. */
+  const whenLabel = (item: SurfacedItem) => (item.all_day ? "all day" : formatWhen(item.at));
+
   return (
     <>
       {/* ── The day's items ─────────────────────────────────────────────── */}
@@ -98,12 +107,19 @@ export default function Today() {
             <ol class="today-list">
               <For each={items()}>
                 {(item) => (
-                  <li class="today-item">
+                  <li class="today-item" classList={{ "is-event": !isTask(item) }}>
+                    {/* Kind marker: a shape, not colour alone (brief §12.4). A
+                        task shows an open ring (it can be checked off); an event
+                        shows a filled diamond (it simply occurs). The aria-label
+                        names the kind so it is not conveyed by glyph alone. */}
+                    <span class="today-kind" aria-label={isTask(item) ? "task" : "event"}>
+                      {isTask(item) ? "○" : "◆"}
+                    </span>
                     <div class="today-main">
                       <span class="today-title">{item.title}</span>
                       <span class="today-meta">
                         <time class="item-time" dateTime={item.at}>
-                          {formatWhen(item.at)}
+                          {whenLabel(item)}
                         </time>
                         {/* Overdue is shown as information, never a red badge
                             or a count of how late it is (brief §3, §11). */}
@@ -112,26 +128,30 @@ export default function Today() {
                         </Show>
                       </span>
                     </div>
-                    <div class="today-actions">
-                      <button
-                        class="today-done"
-                        type="button"
-                        disabled={busy()}
-                        aria-label={`Mark "${item.title}" done`}
-                        onClick={() => markDone(item)}
-                      >
-                        Done
-                      </button>
-                      <button
-                        class="today-reassign"
-                        type="button"
-                        disabled={busy()}
-                        aria-label={`Reassign "${item.title}"`}
-                        onClick={() => reassign(item)}
-                      >
-                        Reassign
-                      </button>
-                    </div>
+                    {/* Only tasks carry actions. An event has no "done" — it is
+                        not whose turn, it just happens — so its row is quiet. */}
+                    <Show when={isTask(item)}>
+                      <div class="today-actions">
+                        <button
+                          class="today-done"
+                          type="button"
+                          disabled={busy()}
+                          aria-label={`Mark "${item.title}" done`}
+                          onClick={() => markDone(item)}
+                        >
+                          Done
+                        </button>
+                        <button
+                          class="today-reassign"
+                          type="button"
+                          disabled={busy()}
+                          aria-label={`Reassign "${item.title}"`}
+                          onClick={() => reassign(item)}
+                        >
+                          Reassign
+                        </button>
+                      </div>
+                    </Show>
                   </li>
                 )}
               </For>

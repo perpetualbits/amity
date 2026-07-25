@@ -238,6 +238,25 @@ body {
   border-bottom: 1px solid #e0dfd9;
 }
 
+.today-kind {
+  /* Leading kind marker (○ task / ◆ event). A shape carries the distinction so
+   * colour is never the sole signal (brief §12.4); the glyph has an aria-label. */
+  flex-shrink: 0;
+  width: 1.25rem;
+  font-size: 0.9rem;
+  line-height: 1.15;
+  color: #8a8880;
+  text-align: center;
+  align-self: flex-start;
+  padding-top: 0.15rem;
+}
+
+/* An event's marker sits a touch darker than a task's muted grey — a secondary
+ * cue reinforcing the shape, still never the only one. */
+.today-item.is-event .today-kind {
+  color: #4a4840;
+}
+
 .today-main {
   flex: 1;
   display: flex;
