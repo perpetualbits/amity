@@ -72,24 +72,34 @@ window.PROJECT_MAP = {
       label: "Hub app",
       layer: "surfaces",
       status: "active",
-      tags: ["Tauri", "Solid", "Phase 1"],
+      tags: ["Tauri", "Solid", "Phase 1", "Task 3"],
       desc:
-        "The kitchen hub — a Tauri 2 shell with a Solid frontend. The inbox " +
-        "capture form and recent-items list are shipped and exercise the whole " +
-        "stack end-to-end. The full hub-at-rest design (clock, weather, status " +
-        "patch, ambient LED) and the task / Today views are not built yet, so " +
-        "the surface as a whole is still in progress.",
-      files: ["apps/hub-tauri", "apps/hub-tauri/src/App.tsx", "apps/hub-tauri/src/style.css"],
+        "The kitchen hub — a Tauri 2 shell with a Solid frontend. Two views sit " +
+        "behind a segmented control: Capture (the inbox) and Today (the ranked " +
+        "surface, with mark-done / reassign and an inline task-capture form). " +
+        "These type-check and bundle, but have not been run live — hub-tauri is " +
+        "outside the Cargo workspace and needs WebKit2GTK. The hub-at-rest design " +
+        "(clock, weather, status patch, ambient LED) is still to come, so the " +
+        "surface as a whole stays in progress.",
+      files: [
+        "apps/hub-tauri/src/App.tsx",
+        "apps/hub-tauri/src/Today.tsx",
+        "apps/hub-tauri/src/Capture.tsx",
+        "apps/hub-tauri/src/api.ts",
+        "apps/hub-tauri/src-tauri/src/lib.rs",
+      ],
       specs: [
         { label: "Task 1 — scaffolding & inbox", href: "docs/task_1_scaffolding_and_inbox.md" },
+        { label: "Task 3 — surfacing & Today view", href: "docs/task_3_surfacing_and_today_view.md" },
         { label: "Brief §12 — voice & hub UX", href: "docs/amity_brief.md" },
       ],
       parts: [
         { label: "Inbox capture form", status: "done", desc: "Text input + submit; clears on success, no toast." },
         { label: "Recent-items list", status: "done", desc: "Refreshes on mount and after each capture; designed empty state." },
+        { label: "Capture / Today switch", status: "done", desc: "A two-item segmented control; no router." },
+        { label: "Today view", status: "done", desc: "Renders /surfacing/today with mark-done, reassign, and a calm empty state (type-checked, not yet run live)." },
+        { label: "Task capture form", status: "done", desc: "Title, notes, due, tags, and a recurrence preset that builds the RRULE (not yet run live)." },
         { label: "Hub-at-rest (clock / weather / LED)", status: "planned", desc: "The calm screensaver baseline from brief §11.5–11.6." },
-        { label: "Today's tasks view", status: "planned", desc: "Renders the upcoming-instances query; not yet built." },
-        { label: "Task capture UI", status: "planned", desc: "Spec'd in Task 2 but did not land — App.tsx is still inbox-only." },
       ],
       deps: ["api"],
     },
@@ -210,7 +220,8 @@ window.PROJECT_MAP = {
         { label: "GET /surfacing/today endpoint", status: "done", desc: "Assembles candidates from storage and returns uniform SurfacedItems + empty-state flag." },
         { label: "Empty-state result (has_surfaced)", status: "done", desc: "\"nothing today\" is a real result, not an error — brief §3." },
         { label: "Cross-entity ranking", status: "planned", desc: "Extend the SurfacedKind seam to Event, Project, Thread." },
-        { label: "Today / Week views", status: "planned", desc: "The rich hub rendering of the ranked stream (frontend)." },
+        { label: "Today view", status: "done", desc: "The hub renders the ranked stream (type-checked; live run pending WebKit)." },
+        { label: "Week view", status: "planned", desc: "A second window over the same layer — deferred from Task 3." },
       ],
       deps: ["task", "api"],
     },
