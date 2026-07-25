@@ -146,6 +146,23 @@ define_id!(
     ProjectId
 );
 
+define_id!(
+    /// Unique identifier for an [`Event`](crate::event::Event).
+    ///
+    /// Native and read-only external calendar events share this id type. See
+    /// brief §6.5 (Event) and §7 (calendars & time). Time-ordered UUID v7 keeps
+    /// related event rows physically adjacent in the B-tree index.
+    EventId
+);
+
+define_id!(
+    /// Unique identifier for an [`EventOverride`](crate::event_override::EventOverride).
+    ///
+    /// Each local overlay on a read-only external event instance is one
+    /// `EventOverride` row. See brief §6.5 (`EventOverride`).
+    EventOverrideId
+);
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

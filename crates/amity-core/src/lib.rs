@@ -52,3 +52,16 @@ pub mod completion_log;
 /// chooses information over pressure. See brief §6.4 (surfacing) and §3
 /// (the designed empty state), and `docs/task_3_surfacing_and_today_view.md`.
 pub mod surfacing;
+
+/// `Event`, `EventSource`, `EventSourceKind`, `EventBuilder`, `EventError`.
+///
+/// Calendar events — native and read-only external. Amity is an aggregator,
+/// not a source of truth. See brief §6.5 (Event) and §7 (calendars & time),
+/// and `docs/task_4_event_and_calendar.md`.
+pub mod event;
+
+/// `EventOverride` — a local overlay on a read-only external event instance.
+///
+/// Lets the household record "bin day moved for King's Day" without writing
+/// back to the source. See brief §6.5 (`EventOverride`).
+pub mod event_override;
