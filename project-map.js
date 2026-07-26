@@ -28,7 +28,7 @@ window.PROJECT_MAP = {
     name: "amity",
     tagline: "a peaceful home — project map",
     repo: "github.com/perpetualbits/amity",
-    updated: "2026-07-24",
+    updated: "2026-07-26",
   },
 
   // ── Status vocabulary ─────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ window.PROJECT_MAP = {
         { label: "Inbox capture form", status: "done", desc: "Text input + submit; clears on success, no toast." },
         { label: "Recent-items list", status: "done", desc: "Refreshes on mount and after each capture; designed empty state." },
         { label: "Capture / Today switch", status: "done", desc: "A two-item segmented control; no router." },
-        { label: "Today view", status: "done", desc: "Renders /surfacing/today with mark-done, reassign, and a calm empty state (type-checked, not yet run live)." },
+        { label: "Today view", status: "done", desc: "Renders /surfacing/today as a mixed task+event list with a per-item kind marker (○ task / ◆ event); events show \"all day\" and carry no actions. Mark-done, reassign, and a calm empty state (type-checked, not yet run live)." },
         { label: "Task capture form", status: "done", desc: "Title, notes, due, tags, and a recurrence preset that builds the RRULE (not yet run live)." },
         { label: "Hub-at-rest (clock / weather / LED)", status: "planned", desc: "The calm screensaver baseline from brief §11.5–11.6." },
       ],
@@ -178,7 +178,7 @@ window.PROJECT_MAP = {
         { label: "Capture endpoint (POST /inbox)", status: "done", desc: "Generates id + timestamp, inserts, returns the item." },
         { label: "Recent query (GET /inbox/recent)", status: "done", desc: "N most-recent items; default 20, capped 100." },
         { label: "Non-touch sources", status: "seam", desc: "Voice / mobile / share / forward-email exist in the enum; only touch is wired." },
-        { label: "Triage to typed entity", status: "seam", desc: "Task exists as a triage target; Event and Project are planned. TypedEntityRef is still a \"type:uuid\" string placeholder — the seams are drawn, the flow isn't built." },
+        { label: "Triage to typed entity", status: "seam", desc: "Task and Event both exist as triage targets now; Project is planned. TypedEntityRef is still a \"type:uuid\" string placeholder — the seams are drawn, the flow isn't built." },
       ],
       // Triage edges are typed "seam" dependencies: the inbox does not depend on
       // these entities, it *becomes* one when triaged. Each renders as a dashed,
@@ -200,30 +200,32 @@ window.PROJECT_MAP = {
       desc:
         "The hard part of the whole system: one ranked query that feeds the Today " +
         "view without becoming a nag-machine. The pure ranking rule and the " +
-        "GET /surfacing/today endpoint are shipped and tested — a task surfaces on " +
-        "its day, or when open-and-overdue, and an empty day returns a calm " +
-        "\"nothing today\". It ranks Tasks only for now, behind a mixed-type seam; " +
-        "the cross-entity stream and the Today / Week views are still to come. " +
-        "Tone is a property of this layer: overdue reads as information, never a " +
-        "lateness count.",
+        "GET /surfacing/today endpoint are shipped and tested. It is now genuinely " +
+        "mixed-type: Tasks and Events flow through one kind-agnostic rule — a task " +
+        "surfaces on its day or when open-and-overdue, an event on its start day " +
+        "(never overdue), all-day items lead the day. An empty day returns a calm " +
+        "\"nothing today\". Project and Thread, and the Week view, are still to " +
+        "come. Tone is a property of this layer: overdue reads as information, " +
+        "never a lateness count.",
       files: [
         "crates/amity-core/src/surfacing.rs",
         "crates/amity-service/src/api/surfacing.rs",
       ],
       specs: [
         { label: "Task 3 — surfacing & Today view", href: "docs/task_3_surfacing_and_today_view.md" },
+        { label: "Task 4 — events on Today", href: "docs/task_4_event_and_calendar.md" },
         { label: "Brief §6.4 — surfacing", href: "docs/amity_brief.md" },
         { label: "Brief §18 — roadmap", href: "docs/amity_brief.md" },
       ],
       parts: [
-        { label: "Ranking rule (rank_today)", status: "done", desc: "Pure, tested: window ∩ today or overdue-open; ordered by time, then priority." },
-        { label: "GET /surfacing/today endpoint", status: "done", desc: "Assembles candidates from storage and returns uniform SurfacedItems + empty-state flag." },
+        { label: "Ranking rule (rank_today)", status: "done", desc: "Pure, tested, kind-agnostic: window ∩ today or overdue-open; all-day first, then time, then priority." },
+        { label: "GET /surfacing/today endpoint", status: "done", desc: "Assembles task + event candidates from storage and returns uniform SurfacedItems + empty-state flag." },
         { label: "Empty-state result (has_surfaced)", status: "done", desc: "\"nothing today\" is a real result, not an error — brief §3." },
-        { label: "Cross-entity ranking", status: "planned", desc: "Extend the SurfacedKind seam to Event, Project, Thread." },
-        { label: "Today view", status: "done", desc: "The hub renders the ranked stream (type-checked; live run pending WebKit)." },
+        { label: "Cross-entity ranking", status: "active", desc: "Task and Event now rank together through the kind-agnostic rule; Project and Thread still to come." },
+        { label: "Today view", status: "done", desc: "The hub renders the mixed stream with a per-item kind marker (type-checked; live run pending WebKit)." },
         { label: "Week view", status: "planned", desc: "A second window over the same layer — deferred from Task 3." },
       ],
-      deps: ["task", "api"],
+      deps: ["task", "event", "api"],
     },
     {
       id: "notifications",
@@ -364,19 +366,37 @@ window.PROJECT_MAP = {
       id: "event",
       label: "Event & calendar",
       layer: "domain",
-      status: "planned",
-      tags: ["MVP", "Phase 3"],
+      status: "active",
+      tags: ["MVP", "Phase 3", "Task 4"],
       desc:
-        "Amity as a calendar aggregator, not a source of truth: read-only ICS " +
-        "feeds (school, clubs, afvalkalender, NL holidays, personal calendars) " +
-        "plus a small hub-native calendar for family events, and EventOverride " +
-        "for local overlays on external instances. Not started.",
-      files: [],
+        "Amity as a calendar aggregator, not a source of truth. The hub-native " +
+        "half is shipped end-to-end: an Event entity (recurring or one-shot, " +
+        "all-day or timed) reusing the recurrence engine, an EventOverride for " +
+        "local overlays on an instance, storage, a create/list/get API, and " +
+        "surfacing onto Today — an event shows on its start day, never overdue, " +
+        "and a Cancel override removes it. The aggregator heart — read-only ICS " +
+        "feeds (school, clubs, afvalkalender, NL holidays, personal calendars) — " +
+        "and applying Reschedule/Annotate overrides are the next slice (Task 5).",
+      files: [
+        "crates/amity-core/src/event.rs",
+        "crates/amity-core/src/event_override.rs",
+        "crates/amity-storage/src/event.rs",
+        "crates/amity-service/src/api/event.rs",
+      ],
       specs: [
+        { label: "Task 4 — event & calendar aggregation", href: "docs/task_4_event_and_calendar.md" },
         { label: "Brief §6.5 — Event / EventOverride", href: "docs/amity_brief.md" },
         { label: "Brief §7 — calendars & time", href: "docs/amity_brief.md" },
       ],
-      parts: [],
+      parts: [
+        { label: "Event + EventSource + builder", status: "done", desc: "Native/ICS source, all-day or timed, optional recurrence; validated construction." },
+        { label: "EventOverride", status: "done", desc: "Cancel / Reschedule / Annotate on one instance date; recorded end-to-end." },
+        { label: "Storage (migration 0003)", status: "done", desc: "events + event_instances + event_overrides; source flattened onto the row." },
+        { label: "Event API", status: "done", desc: "POST/GET /events, GET /events/{id}, POST /events/{id}/override — integration-tested." },
+        { label: "Surfacing + Cancel override", status: "done", desc: "Events surface on Today via the kind-agnostic rule; a Cancel override removes the day's instance." },
+        { label: "Reschedule / Annotate applied", status: "seam", desc: "Overrides are stored but only Cancel affects surfacing yet — the overlay is wired, not fully applied." },
+        { label: "ICS ingestion & external feeds", status: "planned", desc: "Read-only school/club/afvalkalender/holiday calendars — the aggregator half, Task 5." },
+      ],
       deps: ["recurrence"],
     },
     {
@@ -436,20 +456,23 @@ window.PROJECT_MAP = {
       status: "active",
       tags: ["axum", "/api/v1"],
       desc:
-        "The axum router under /api/v1. The inbox endpoints (2) and the full " +
-        "task surface (9, including complete / skip / assignee / history) are " +
-        "wired and tested. Auth is deliberately absent — the service binds to " +
-        "loopback only for now; it grows as more entities land.",
+        "The axum router under /api/v1. The inbox endpoints (2), the full task " +
+        "surface (9, including complete / skip / assignee / history), and the " +
+        "event endpoints (4: create / list / get / override) are all wired and " +
+        "tested. Auth is deliberately absent — the service binds to loopback only " +
+        "for now; it grows as more entities land.",
       files: ["crates/amity-service/src/api", "crates/amity-service/src/lib.rs"],
       specs: [
         { label: "Task 1 — API conventions", href: "docs/task_1_scaffolding_and_inbox.md" },
         { label: "Task 2 — Task API", href: "docs/task_2_task_entity.md" },
+        { label: "Task 4 — Event API", href: "docs/task_4_event_and_calendar.md" },
       ],
       parts: [
         { label: "Inbox endpoints", status: "done", desc: "POST /inbox, GET /inbox/recent." },
         { label: "Task endpoints", status: "done", desc: "CRUD + complete / skip / assignee / upcoming / history." },
+        { label: "Event endpoints", status: "done", desc: "POST/GET /events, GET /events/{id}, POST /events/{id}/override." },
         { label: "Auth", status: "planned", desc: "Loopback-only isolation today; real auth arrives with members." },
-        { label: "Remaining entities", status: "planned", desc: "Event, Meal, Project… each adds a handler module." },
+        { label: "Remaining entities", status: "planned", desc: "Meal, Project… each adds a handler module." },
       ],
       deps: ["storage"],
     },
@@ -508,9 +531,10 @@ window.PROJECT_MAP = {
       tags: ["Phase 1", "sqlx", "SQLite"],
       desc:
         "sqlx over SQLite with embedded migrations that apply automatically on " +
-        "first run. Two migrations so far (inbox; tasks + instances + completion " +
-        "logs) and a repository module per entity. ISO-8601 datetimes and TEXT " +
-        "UUIDs keep the schema portable to Postgres later.",
+        "first run. Three migrations so far (inbox; tasks + instances + completion " +
+        "logs; events + instances + overrides) and a repository module per entity. " +
+        "ISO-8601 datetimes and TEXT UUIDs keep the schema portable to Postgres " +
+        "later.",
       files: ["crates/amity-storage/src", "crates/amity-storage/migrations"],
       specs: [
         { label: "ADR-0001 — initial architecture", href: "docs/adrs/0001-initial-architecture.md" },
@@ -520,6 +544,7 @@ window.PROJECT_MAP = {
         { label: "Connection / pool", status: "done", desc: "Pool setup; migrations embedded at compile time." },
         { label: "Inbox repository", status: "done", desc: "insert / fetch / list-recent, with an index on captured_at." },
         { label: "Task / instance / log repositories", status: "done", desc: "Full insert-materialise-complete cycle, integration-tested." },
+        { label: "Event / instance / override repositories", status: "done", desc: "Event source flattened onto the row; instances upserted; overrides looked up by date. Integration-tested." },
         { label: "Postgres portability", status: "planned", desc: "Kept portable by convention; not exercised until there's a reason." },
       ],
       deps: [],
@@ -601,7 +626,7 @@ window.PROJECT_MAP = {
   // backend and its recurrence engine — rather than strictly phase by phase, so
   // phases 1, 3 and 4 are all partly done at once while 2, 5 and 6 are untouched.
   roadmap: [
-    { id: "t3", kind: "next", label: "Task 3 · Surfacing + Today view", status: "active" },
+    { id: "t5", kind: "next", label: "Task 5 · ICS ingestion + external calendars", status: "planned" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
     { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },
