@@ -40,6 +40,13 @@ pub mod recurrence_materialiser;
 /// Task is the most-used entity in Amity — see brief §6.5 and §8.
 pub mod task;
 
+/// `Calendar`, `CalendarBuilder`, `CalendarCategory`, `SyncStatus`, `CalendarError`.
+///
+/// One subscribed external ICS feed. Amity is a calendar aggregator — the
+/// household subscribes to read-only feeds (school, waste, holidays, personal)
+/// and the hub displays their events. See brief §7 and `docs/task_5_ics_ingestion.md`.
+pub mod calendar;
+
 /// `CompletionLog` — the immutable record of a Task instance being completed.
 ///
 /// The substrate for the household's own fairness conversations.

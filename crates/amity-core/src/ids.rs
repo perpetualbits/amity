@@ -104,6 +104,12 @@ macro_rules! define_id {
 }
 
 define_id!(
+    /// Unique identifier for a [`Calendar`](crate::calendar::Calendar) — one
+    /// subscribed external ICS feed. See Task 5 and brief §7.
+    CalendarId
+);
+
+define_id!(
     /// Unique identifier for an [`InboxItem`](crate::inbox::InboxItem).
     ///
     /// See brief §6.3 for the Inbox data model.
