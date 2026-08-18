@@ -19,6 +19,12 @@
 //   completion_log  — repository functions for CompletionLog (append-only)
 //   task_instance   — repository functions for materialised task instances
 
+/// Repository functions for [`amity_core::calendar::Calendar`].
+///
+/// Exposes insert, list, fetch, enable/disable, sync-state update, and delete
+/// (which cascades to that calendar's events and event instances).
+pub mod calendar;
+
 /// Database connection pool construction and migration application.
 pub mod connection;
 
