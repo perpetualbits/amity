@@ -77,3 +77,7 @@ rrule  = { version = "0.11" }
 # rrule↔time crate boundary. The time crate remains preferred for all other
 # date/time handling throughout the codebase.
 chrono = { version = "0.4" }
+
+# iCalendar (RFC 5545) parser for read-only external feed ingestion (Task 5).
+# Used only inside amity-core's ics module, behind our own parse_feed wrapper.
+ical = { version = "0.11", default-features = false, features = ["ical"] }
