@@ -28,7 +28,7 @@ window.PROJECT_MAP = {
     name: "amity",
     tagline: "a peaceful home — project map",
     repo: "github.com/perpetualbits/amity",
-    updated: "2026-07-26",
+    updated: "2026-08-18",
   },
 
   // ── Status vocabulary ─────────────────────────────────────────────────────
@@ -367,7 +367,7 @@ window.PROJECT_MAP = {
       label: "Event & calendar",
       layer: "domain",
       status: "active",
-      tags: ["MVP", "Phase 3", "Task 4"],
+      tags: ["MVP", "Phase 3", "Task 4", "Task 5"],
       desc:
         "Amity as a calendar aggregator, not a source of truth. The hub-native " +
         "half is shipped end-to-end: an Event entity (recurring or one-shot, " +
@@ -375,16 +375,26 @@ window.PROJECT_MAP = {
         "local overlays on an instance, storage, a create/list/get API, and " +
         "surfacing onto Today — an event shows on its start day, never overdue, " +
         "and a Cancel override removes it. The aggregator heart — read-only ICS " +
-        "feeds (school, clubs, afvalkalender, NL holidays, personal calendars) — " +
-        "and applying Reschedule/Annotate overrides are the next slice (Task 5).",
+        "feeds (school, clubs, afvalkalender, NL holidays, personal calendars), " +
+        "fetched under ADR-0004's egress guards and synced every ~6h — has now " +
+        "shipped too (Task 5). Applying Reschedule/Annotate overrides to any " +
+        "instance, native or external, remains the one open seam.",
       files: [
         "crates/amity-core/src/event.rs",
         "crates/amity-core/src/event_override.rs",
+        "crates/amity-core/src/calendar.rs",
+        "crates/amity-core/src/ics.rs",
         "crates/amity-storage/src/event.rs",
+        "crates/amity-storage/src/calendar.rs",
         "crates/amity-service/src/api/event.rs",
+        "crates/amity-service/src/api/calendar.rs",
+        "crates/amity-service/src/feeds.rs",
+        "crates/amity-service/src/jobs/calendar_sync.rs",
       ],
       specs: [
         { label: "Task 4 — event & calendar aggregation", href: "docs/task_4_event_and_calendar.md" },
+        { label: "Task 5 — ICS ingestion design", href: "docs/superpowers/specs/2026-07-26-task-5-ics-ingestion-design.md" },
+        { label: "ADR-0004 — external calendar ingestion", href: "docs/adrs/0004-external-calendar-ingestion.md" },
         { label: "Brief §6.5 — Event / EventOverride", href: "docs/amity_brief.md" },
         { label: "Brief §7 — calendars & time", href: "docs/amity_brief.md" },
       ],
@@ -395,7 +405,7 @@ window.PROJECT_MAP = {
         { label: "Event API", status: "done", desc: "POST/GET /events, GET /events/{id}, POST /events/{id}/override — integration-tested." },
         { label: "Surfacing + Cancel override", status: "done", desc: "Events surface on Today via the kind-agnostic rule; a Cancel override removes the day's instance." },
         { label: "Reschedule / Annotate applied", status: "seam", desc: "Overrides are stored but only Cancel affects surfacing yet — the overlay is wired, not fully applied." },
-        { label: "ICS ingestion & external feeds", status: "planned", desc: "Read-only school/club/afvalkalender/holiday calendars — the aggregator half, Task 5." },
+        { label: "ICS ingestion & external feeds", status: "done", desc: "Read-only school/club/afvalkalender/holiday/personal calendars fetched, parsed, and synced every ~6h under ADR-0004's egress guards — the aggregator half, Task 5." },
       ],
       deps: ["recurrence"],
     },
@@ -457,20 +467,23 @@ window.PROJECT_MAP = {
       tags: ["axum", "/api/v1"],
       desc:
         "The axum router under /api/v1. The inbox endpoints (2), the full task " +
-        "surface (9, including complete / skip / assignee / history), and the " +
-        "event endpoints (4: create / list / get / override) are all wired and " +
-        "tested. Auth is deliberately absent — the service binds to loopback only " +
-        "for now; it grows as more entities land.",
+        "surface (9, including complete / skip / assignee / history), the " +
+        "event endpoints (4: create / list / get / override), and the calendars " +
+        "endpoints (6: subscribe / list / get / enable-disable / delete / refresh) " +
+        "are all wired and tested. Auth is deliberately absent — the service " +
+        "binds to loopback only for now; it grows as more entities land.",
       files: ["crates/amity-service/src/api", "crates/amity-service/src/lib.rs"],
       specs: [
         { label: "Task 1 — API conventions", href: "docs/task_1_scaffolding_and_inbox.md" },
         { label: "Task 2 — Task API", href: "docs/task_2_task_entity.md" },
         { label: "Task 4 — Event API", href: "docs/task_4_event_and_calendar.md" },
+        { label: "Task 5 — Calendars API", href: "docs/superpowers/specs/2026-07-26-task-5-ics-ingestion-design.md" },
       ],
       parts: [
         { label: "Inbox endpoints", status: "done", desc: "POST /inbox, GET /inbox/recent." },
         { label: "Task endpoints", status: "done", desc: "CRUD + complete / skip / assignee / upcoming / history." },
         { label: "Event endpoints", status: "done", desc: "POST/GET /events, GET /events/{id}, POST /events/{id}/override." },
+        { label: "Calendars endpoints", status: "done", desc: "POST/GET /calendars, GET /calendars/{id}, PATCH /calendars/{id}, DELETE /calendars/{id}, POST /calendars/{id}/refresh." },
         { label: "Auth", status: "planned", desc: "Loopback-only isolation today; real auth arrives with members." },
         { label: "Remaining entities", status: "planned", desc: "Meal, Project… each adds a handler module." },
       ],
@@ -531,20 +544,24 @@ window.PROJECT_MAP = {
       tags: ["Phase 1", "sqlx", "SQLite"],
       desc:
         "sqlx over SQLite with embedded migrations that apply automatically on " +
-        "first run. Three migrations so far (inbox; tasks + instances + completion " +
-        "logs; events + instances + overrides) and a repository module per entity. " +
-        "ISO-8601 datetimes and TEXT UUIDs keep the schema portable to Postgres " +
-        "later.",
+        "first run. Four migrations so far (inbox; tasks + instances + completion " +
+        "logs; events + instances + overrides; calendars + the unique index that " +
+        "makes external-event upsert well-defined) and a repository module per " +
+        "entity. ISO-8601 datetimes and TEXT UUIDs keep the schema portable to " +
+        "Postgres later.",
       files: ["crates/amity-storage/src", "crates/amity-storage/migrations"],
       specs: [
         { label: "ADR-0001 — initial architecture", href: "docs/adrs/0001-initial-architecture.md" },
         { label: "Task 1 — storage layer", href: "docs/task_1_scaffolding_and_inbox.md" },
+        { label: "ADR-0004 — external calendar ingestion", href: "docs/adrs/0004-external-calendar-ingestion.md" },
       ],
       parts: [
         { label: "Connection / pool", status: "done", desc: "Pool setup; migrations embedded at compile time." },
         { label: "Inbox repository", status: "done", desc: "insert / fetch / list-recent, with an index on captured_at." },
         { label: "Task / instance / log repositories", status: "done", desc: "Full insert-materialise-complete cycle, integration-tested." },
         { label: "Event / instance / override repositories", status: "done", desc: "Event source flattened onto the row; instances upserted; overrides looked up by date. Integration-tested." },
+        { label: "Calendars repository (migration 0004)", status: "done", desc: "calendars table + sync state; insert/list/fetch/update/delete, integration-tested." },
+        { label: "External-event upsert / prune", status: "done", desc: "upsert_external_events (ON CONFLICT on source_calendar_id + source_external_id) and prune_events_missing_from_feed keep a feed's events in sync without wiping on a transient fetch failure." },
         { label: "Postgres portability", status: "planned", desc: "Kept portable by convention; not exercised until there's a reason." },
       ],
       deps: [],
@@ -578,18 +595,23 @@ window.PROJECT_MAP = {
       desc:
         "The categorical commitments — no surveillance vectors, no commercial " +
         "data flow, local-first — are already honoured by the architecture: the " +
-        "service is loopback-only and all data stays on the device. The " +
-        "user-facing governance (two tiers, per-item visibility with no admin " +
-        "reveal, the 90-day change log, the help-finding affordance) is not " +
-        "built yet — it arrives with real members.",
-      files: ["docs/amity_philosophy.md"],
+        "service itself is loopback-only, and the one exception — Task 5's " +
+        "outbound ICS feed fetches — is a user-initiated or user-scheduled " +
+        "read-only GET of a calendar the household chose, carrying no household " +
+        "data, bounded by ADR-0004's egress guards. The user-facing governance " +
+        "(two tiers, per-item visibility with no admin reveal, the 90-day change " +
+        "log, the help-finding affordance) is not built yet — it arrives with " +
+        "real members.",
+      files: ["docs/amity_philosophy.md", "docs/adrs/0004-external-calendar-ingestion.md"],
       specs: [
         { label: "Brief §2 — categorical commitments", href: "docs/amity_brief.md" },
         { label: "Brief §14 — privacy, governance, safety", href: "docs/amity_brief.md" },
+        { label: "ADR-0004 — external calendar ingestion", href: "docs/adrs/0004-external-calendar-ingestion.md" },
       ],
       parts: [
-        { label: "Local-first / loopback-only", status: "done", desc: "The service does not listen beyond localhost; data never leaves the device." },
-        { label: "Categorical commitments", status: "done", desc: "Enforced by architecture — no telemetry, no outbound data flow, no always-on capture." },
+        { label: "Local-first / loopback-only", status: "done", desc: "The service does not listen beyond localhost; all data is created and read on the device." },
+        { label: "Categorical commitments", status: "done", desc: "Enforced by architecture — no telemetry, no always-on capture, no commercial data flow. Outbound traffic is limited to user-initiated/scheduled read-only calendar-feed fetches (see below), never surveillance or profiling." },
+        { label: "ICS fetch egress guards (ADR-0004)", status: "done", desc: "Task 5's outbound fetch — the system's first — is bounded by a scheme allow-list (http/https only), a 20s timeout, a 5 MiB cap enforced while streaming, a 5-redirect bound, and no compression compiled in; it sends no household data, only a plain GET of the configured feed URL." },
         { label: "Two-tier governance", status: "planned", desc: "Admin / member, with admins content-blind to private items." },
         { label: "Per-item privacy / no admin reveal", status: "planned", desc: "Owner-set visibility; no override exposes a child's private item." },
         { label: "Change log & audit", status: "planned", desc: "Factual 90-day record; no blame view, no monitoring." },
@@ -625,8 +647,10 @@ window.PROJECT_MAP = {
   // linear plan: the maintainer built vertically — foundation plus the Task
   // backend and its recurrence engine — rather than strictly phase by phase, so
   // phases 1, 3 and 4 are all partly done at once while 2, 5 and 6 are untouched.
+  // No "next" entry is listed here: Task 5 (ICS ingestion) shipped as of this
+  // sync and no successor task is specified yet. Add a new { kind: "next", ... }
+  // entry once one is.
   roadmap: [
-    { id: "t5", kind: "next", label: "Task 5 · ICS ingestion + external calendars", status: "planned" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
     { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },
