@@ -41,9 +41,9 @@ Several design questions had to be settled:
 
 Amity subscribes to external calendars by their ICS feed URL — `https://`,
 or `webcal://` (rewritten to `https://` at construction; see below) — and
-never writes back. `Calendar::CATEGORY` covers the household's real sources
+never writes back. `CalendarCategory` covers the household's real sources
 (school, club, waste, holiday, personal) and the hub-native calendar from
-Task 4 remains the only calendar Amity can write to. `EventSource::Ics`
+Task 4 remains the only calendar Amity can write to. `EventSourceKind::Ics`
 marks every event pulled from a feed as `read_only`, a flag Task 4 already
 laid down for this task to fill.
 
@@ -120,6 +120,13 @@ The project-map `privacy` node's "no outbound data flow" claim is corrected
 by this task to the precise statement: loopback-only service, plus
 user-initiated and scheduled read-only outbound fetches of configured
 calendar feeds, bounded by the guards above.
+
+**Accepted out of scope for the MVP:** the guards above bound size, time, and
+redirects, but do not add an egress allow-list — within the local-first,
+single-household model, a feed URL pointing at loopback/link-local/RFC-1918
+internal addresses, and a cleartext-`http` feed exposing its embedded token
+on the wire, are both accepted risks, since the household configures its own
+feed URLs on its own device rather than a third party supplying them.
 
 ### Feed URLs are stored in plaintext
 

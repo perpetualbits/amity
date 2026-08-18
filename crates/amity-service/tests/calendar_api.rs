@@ -255,3 +255,103 @@ async fn ingested_external_event_surfaces_on_today() {
     assert_eq!(other_items.len(), 1);
     assert_eq!(other_items[0]["title"], "other day");
 }
+
+// ─── Regression: recurring external events past their first occurrence ───────
+//
+// Final whole-branch review (Critical #1): `Event.recurrence` is deliberately
+// left `None` for every Ics-sourced event (external recurrence is trusted to
+// the source, never mirrored — see `amity_core::event`'s doc comment). Before
+// the fix, surfacing used `event.recurrence.is_none()` to decide whether to
+// read `event_instances`, so every external event — recurring or not — took
+// the one-shot `start_at` branch and only ever surfaced on its very first
+// occurrence, no matter how many weeks the feed said it recurred for.
+//
+// A weekly Friday feed event, starting 2099-05-01 (a Friday). The 3rd
+// occurrence, 2099-05-15, is a later occurrence than the sync job's very
+// first materialised instance — exactly the case Critical #1 broke.
+const RECURRING_FIXTURE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:weekly-recurring\r\nSUMMARY:weekly recurring\r\nDTSTART:20990501T090000Z\r\nRRULE:FREQ=WEEKLY;BYDAY=FR\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+/// The same UID/DTSTART/RRULE as `RECURRING_FIXTURE`, but with an EXDATE
+/// removing the 2099-05-15 occurrence — simulating the household's feed
+/// cancelling that one week (e.g. a school holiday). Used to prove Important
+/// #2: a re-sync must sweep the now-stale instance row rather than leaving it
+/// behind forever (`upsert_event_instances` is INSERT OR IGNORE and never
+/// prunes on its own).
+const RESCHEDULED_FIXTURE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:weekly-recurring\r\nSUMMARY:weekly recurring\r\nDTSTART:20990501T090000Z\r\nRRULE:FREQ=WEEKLY;BYDAY=FR\r\nEXDATE:20990515T090000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+#[tokio::test]
+async fn recurring_external_event_surfaces_on_a_later_occurrence_and_sweeps_stale_ones() {
+    // Same rationale as `ingested_external_event_surfaces_on_today`: share one
+    // pool between the HTTP app and `run_once` so ingested rows are visible to
+    // the surfacing request.
+    let db = open_database("sqlite::memory:")
+        .await
+        .expect("in-memory database should open");
+    let app = build_app(db.clone());
+
+    // Subscribe a calendar via the real API.
+    let create = post_json(
+        app.clone(),
+        "/api/v1/calendars",
+        json!({ "name": "club", "url": "https://example.test/club.ics", "category": "club" }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+
+    // ── First sync: the plain weekly feed ──────────────────────────────
+    let now = time::macros::datetime!(2099-04-27 12:00:00 UTC);
+    let report = run_once(&db, now, |_url| {
+        ready(Ok::<_, FetchError>(RECURRING_FIXTURE.to_owned()))
+    })
+    .await
+    .expect("sync run succeeds");
+    assert_eq!(report.calendars_synced, 1);
+    assert_eq!(report.events_upserted, 1);
+
+    // The 1st occurrence (its start date) surfaces, as before the fix.
+    let first = get(app.clone(), "/api/v1/surfacing/today?date=2099-05-01").await;
+    let first_body = body_json(first).await;
+    let first_items = first_body["items"].as_array().expect("items array");
+    assert_eq!(first_items.len(), 1);
+    assert_eq!(first_items[0]["title"], "weekly recurring");
+
+    // The 3rd occurrence, a LATER week — this is what Critical #1 broke: the
+    // event's `Event.recurrence` is `None` (external recurrence is never
+    // copied onto it), so pre-fix surfacing treated it as one-shot and never
+    // read the `event_instances` row materialised for this later Friday.
+    let later = get(app.clone(), "/api/v1/surfacing/today?date=2099-05-15").await;
+    assert_eq!(later.status(), StatusCode::OK);
+    let later_body = body_json(later).await;
+    assert_eq!(later_body["has_surfaced"], true);
+    let later_items = later_body["items"].as_array().expect("items array");
+    assert_eq!(later_items.len(), 1);
+    assert_eq!(later_items[0]["kind"], "event");
+    assert_eq!(later_items[0]["title"], "weekly recurring");
+
+    // ── Second sync: the feed now EXDATEs the 2099-05-15 occurrence ────
+    // Guards Important #2: `upsert_event_instances` only ever inserts, so
+    // without a sweep the stale 2099-05-15 instance row would linger forever.
+    let now2 = time::macros::datetime!(2099-04-28 12:00:00 UTC);
+    let report2 = run_once(&db, now2, |_url| {
+        ready(Ok::<_, FetchError>(RESCHEDULED_FIXTURE.to_owned()))
+    })
+    .await
+    .expect("second sync run succeeds");
+    assert_eq!(report2.calendars_synced, 1);
+    assert_eq!(report2.events_upserted, 1);
+
+    // The EXDATE'd occurrence no longer surfaces on its old date.
+    let swept = get(app.clone(), "/api/v1/surfacing/today?date=2099-05-15").await;
+    let swept_body = body_json(swept).await;
+    assert_eq!(swept_body["has_surfaced"], false);
+    let swept_items = swept_body["items"].as_array().expect("items array");
+    assert_eq!(swept_items.len(), 0);
+
+    // The 1st occurrence, untouched by the EXDATE, still surfaces — proving
+    // the sweep only removed the stale instance, not the whole event.
+    let still_first = get(app, "/api/v1/surfacing/today?date=2099-05-01").await;
+    let still_first_body = body_json(still_first).await;
+    let still_first_items = still_first_body["items"].as_array().expect("items array");
+    assert_eq!(still_first_items.len(), 1);
+    assert_eq!(still_first_items[0]["title"], "weekly recurring");
+}

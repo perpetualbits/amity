@@ -11,7 +11,10 @@
 //   3. upserts the corresponding `Event` rows, keyed by (calendar, UID);
 //   4. prunes any previously-ingested event whose UID vanished from the feed;
 //   5. re-materialises each event's instances out to the 60-day horizon
-//      (matching the horizon used for native events/tasks); and
+//      (matching the horizon used for native events/tasks), first sweeping
+//      that event's not-yet-happened instance rows so a rescheduled DTSTART
+//      or a newly-added EXDATE does not leave stale rows behind (see
+//      `materialise_instances`'s doc comment); and
 //   6. records the outcome (`Ok` / `Unreachable` / `ParseError`) on the
 //      calendar's sync state.
 //
@@ -50,7 +53,12 @@ use amity_storage::calendar::{StoredCalendar, list_calendars, update_calendar_sy
 // Event persistence: upsert the ingested rows and prune the ones that vanished.
 use amity_storage::event::{list_events, prune_events_missing_from_feed, upsert_external_events};
 // Instance persistence: the materialised occurrences the Today view reads.
-use amity_storage::event_instance::{EventInstance, upsert_event_instances};
+// `delete_future_event_instances` sweeps an event's not-yet-happened instance
+// rows before re-materialising — see `materialise_instances`'s doc comment for
+// why a re-sync needs this (Important #2, final whole-branch review).
+use amity_storage::event_instance::{
+    EventInstance, delete_future_event_instances, upsert_event_instances,
+};
 
 // ─── Tuning constants ───────────────────────────────────────────────────────
 
@@ -329,10 +337,21 @@ fn build_events(
 /// back by `(calendar_id, external_id)` gives the authoritative id each
 /// instance must reference.
 ///
+/// Before re-materialising an event's instances, its not-yet-happened
+/// (`scheduled_at >= now`) instance rows are swept via
+/// `delete_future_event_instances`. Without this, a re-sync only ever adds
+/// rows (`upsert_event_instances` is `INSERT OR IGNORE`, keyed on
+/// `(event_id, scheduled_at)`), so a feed edit — DTSTART/RRULE change or a
+/// newly-added EXDATE — would leave the old, now-stale instances in place
+/// forever alongside the fresh ones (Important #2, final whole-branch
+/// review). Past instances are untouched: the delete's lower bound is `now`,
+/// matching `expand_external`'s own `from` bound below, so history is never
+/// disturbed by a routine re-sync.
+///
 /// # Errors
 ///
-/// Returns an error string if reading the events back or upserting the
-/// instances fails.
+/// Returns an error string if reading the events back, sweeping stale
+/// instances, or upserting the fresh ones fails.
 async fn materialise_instances(
     pool: &SqlitePool,
     parsed_events: &[ParsedEvent],
@@ -365,6 +384,15 @@ async fn materialise_instances(
         let Some(&event_id) = event_id_by_uid.get(parsed.uid.as_str()) else {
             continue;
         };
+        // Sweep this event's not-yet-happened instances BEFORE expanding the
+        // fresh set below, using the authoritative `event_id` resolved above
+        // (the same id the upsert below will reference) — see this
+        // function's doc comment for why a re-sync needs this. A per-event
+        // delete is fine at household scale (a handful of calendars, each
+        // with a small event count).
+        delete_future_event_instances(pool, event_id, now)
+            .await
+            .map_err(|e| format!("delete_future_event_instances: {e}"))?;
         // A one-shot event yields its single start (if in-window); a
         // recurring one yields every occurrence the rrule crate produces
         // between `now` and `horizon` — see `expand_external`'s doc comment.
