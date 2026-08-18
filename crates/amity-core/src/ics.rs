@@ -388,18 +388,29 @@ pub fn expand_external(
     };
 
     // Determine which zone name to pair with the DTSTART's local components.
-    // `event.start` already carries the correct offset for its zone (resolved
-    // during parsing), so a zero UTC offset unambiguously means the source
-    // used `Z` — no IANA zone (Amsterdam, or any other) is ever at +00:00,
-    // so this check cannot misclassify a real Amsterdam instant as UTC.
-    let tz = if event.start.offset() == UtcOffset::UTC {
-        "UTC"
-    } else {
-        event
-            .tzid
-            .as_deref()
-            .unwrap_or(RecurrenceRule::default_timezone())
-    };
+    //
+    // The recorded TZID (captured during parsing) always wins when present:
+    // it is the source's own statement of which IANA zone the recurrence
+    // must follow, and that zone's DST behaviour has to drive every future
+    // instance. A zero UTC offset on `event.start` is NOT a reliable UTC
+    // signal on its own — several real IANA zones sit at exactly `+00:00`
+    // for part of the year (Europe/London and Europe/Dublin in winter,
+    // Atlantic/Reykjavik year-round), so guessing "UTC" from the offset
+    // alone would silently strip DST from a London/Dublin recurrence the
+    // moment it is expanded (see the `expand_external_honours_recorded_tzid_
+    // across_dst_boundary` regression test). The offset-based guess is only
+    // reached as a fallback, for the case the parser leaves genuinely
+    // ambiguous: no TZID was recorded at all, meaning the source's DTSTART
+    // either had a literal `Z` (offset ends up +00:00 → "UTC" is correct) or
+    // had no TZID and no `Z` (offset ends up at whatever the project default
+    // zone resolved to, which is never +00:00 — see `parse_ics_datetime`).
+    let tz = event.tzid.as_deref().unwrap_or_else(|| {
+        if event.start.offset() == UtcOffset::UTC {
+            "UTC"
+        } else {
+            RecurrenceRule::default_timezone()
+        }
+    });
 
     // Build the DTSTART;TZID=…:…\nRRULE:… block from the event's local-time
     // components, exactly as `materialise_instances` does — see
@@ -428,7 +439,11 @@ pub fn expand_external(
 
     // EXDATE compares by calendar date (the common case: skip a single
     // occurrence's day), matching the holiday-skip comparison used in
-    // `materialise_instances`.
+    // `materialise_instances`. This is a deliberate simplification: it is
+    // only loose for a sub-daily FREQ (more than one instance sharing a
+    // calendar date), which is out of scope here — every RRULE this module
+    // expands is whatever the external feed emits, but Amity's rendering is
+    // day-granular, so date-level exclusion matches real-world usage.
     let exdate_days: std::collections::HashSet<Date> =
         event.exdates.iter().map(|instant| instant.date()).collect();
 
@@ -508,6 +523,17 @@ mod tests {
     // A good event followed by a broken one (missing DTSTART).
     const ONE_BAD: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:ok-1\r\nSUMMARY:Good\r\nDTSTART:20990202T090000Z\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:bad-1\r\nSUMMARY:No start\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
 
+    // A weekly-Thursday VEVENT with an explicit TZID whose offset is +00:00
+    // in winter (Europe/London is on GMT, not BST, until the last Sunday of
+    // March) — the regression fixture for the DST-correctness bug flagged in
+    // code review. DTSTART 2027-01-07 is a Thursday at 09:00 London time.
+    // Europe/London is the deliberate choice: unlike Europe/Amsterdam (the
+    // project default, always UTC+1/+2, never UTC+0), London's *winter*
+    // offset happens to equal `+00:00` — the same numeric value as a literal
+    // `Z`. A TZID-vs-UTC test using Amsterdam could never catch a bug that
+    // only manifests when a real IANA zone coincides with UTC.
+    const LONDON_WEEKLY: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:ldn-1\r\nSUMMARY:London Thursday\r\nDTSTART;TZID=Europe/London:20270107T090000\r\nRRULE:FREQ=WEEKLY;BYDAY=TH\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
     #[test]
     fn parses_a_single_timed_event() {
         let events = parse_feed(SINGLE).expect("valid feed");
@@ -560,5 +586,57 @@ mod tests {
         let to = datetime!(2099-12-31 00:00:00 UTC);
         let instants = expand_external(&events[0], from, to);
         assert_eq!(instants, vec![datetime!(2099-02-02 09:00:00 UTC)]);
+    }
+
+    #[test]
+    fn expand_external_honours_recorded_tzid_across_dst_boundary() {
+        // Regression test for a code-review finding: `expand_external` must
+        // not discard a recorded TZID just because the DTSTART's *resolved*
+        // offset happens to equal `+00:00` — that coincidence occurs for any
+        // zone on GMT/UTC-equivalent standard time (Europe/London here), not
+        // only for a literal `Z` value. Getting this wrong means the
+        // recurrence loses DST awareness entirely: it would keep expanding
+        // at a fixed `+00:00` offset year-round instead of shifting to
+        // `+01:00` (BST) in summer.
+        let events = parse_feed(LONDON_WEEKLY).expect("valid feed");
+        let event = &events[0];
+        // Sanity check: the TZID param was captured, not silently dropped
+        // during parsing (parsing itself was never the buggy layer — only
+        // `expand_external`'s zone-selection was — but this pins the input).
+        assert_eq!(event.tzid.as_deref(), Some("Europe/London"));
+
+        // Window spans the winter (GMT) side and one Thursday past the
+        // spring-forward (into BST), without reaching the following
+        // Thursday — keeps the expected instance count small and exact.
+        let from = datetime!(2027-03-01 00:00:00 UTC);
+        let to = datetime!(2027-04-02 00:00:00 UTC);
+        let instants = expand_external(event, from, to);
+
+        // Thursdays: Mar 4, 11, 18, 25 (GMT) and Apr 1 (BST) — 5 instances.
+        assert_eq!(
+            instants.len(),
+            5,
+            "expected 5 Thursdays, Mar 4 through Apr 1"
+        );
+
+        // Mar 25 — before the 2027 spring-forward (2027-03-28): still GMT,
+        // offset +00:00, wall-clock hour unchanged at 09:00.
+        let mar_25 = instants[3];
+        assert_eq!(
+            mar_25,
+            datetime!(2027-03-25 09:00:00 +00:00),
+            "Mar 25 must be 09:00 GMT (+00:00), before the spring-forward"
+        );
+
+        // Apr 1 — after the spring-forward: BST, offset +01:00. If the
+        // buggy code substituted TZID=UTC here, this instance would
+        // incorrectly still show +00:00 (no DST shift at all).
+        let apr_1 = instants[4];
+        assert_eq!(
+            apr_1,
+            datetime!(2027-04-01 09:00:00 +01:00),
+            "Apr 1 must be 09:00 BST (+01:00): the recorded TZID, not UTC, \
+             must drive the recurrence's DST behaviour"
+        );
     }
 }
