@@ -66,6 +66,13 @@ async fn main() -> anyhow::Result<()> {
     // aged-out ones — and then daily. Cloning the pool is cheap (Arc inside).
     amity_service::jobs::recurrence_horizon::spawn(db.clone());
 
+    // Spawn the ICS calendar sync job. It runs once immediately — fetching
+    // every enabled subscribed feed, ingesting its events, and materialising
+    // their instances to the 60-day horizon — and then every 6 hours. This is
+    // Amity's only outbound network egress; see `amity_service::feeds` for
+    // the timeout/redirect/size guards applied to every fetch.
+    amity_service::jobs::calendar_sync::spawn(db.clone());
+
     // `build_app` wires the axum router with the database pool as shared state.
     // The pool is Arc-wrapped inside SqlitePool so cloning it shares the connection.
     let app = build_app(db);

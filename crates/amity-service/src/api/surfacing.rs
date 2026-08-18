@@ -9,10 +9,12 @@
 //
 //   1. Resolve the target day (?date=…, else today in UTC).
 //   2. Load tasks AND events. One-shot tasks become a Window candidate; recurring
-//      tasks a Scheduled candidate per instance; one-shot events a Scheduled
-//      candidate on their start date; recurring events one per instance, minus
-//      any instance with a Cancel override. (The pure rule drops resolved/undated
-//      tasks — we do not pre-filter.)
+//      tasks a Scheduled candidate per instance; a one-shot NATIVE event a
+//      Scheduled candidate on its start date; every other event — native
+//      recurring, or any Ics event at all — one Scheduled candidate per
+//      materialised `event_instances` row, minus any instance with a Cancel
+//      override. (The pure rule drops resolved/undated tasks — we do not
+//      pre-filter.)
 //   3. Rank via `rank_today` and return a uniform, type-tagged item list plus
 //      the `has_surfaced` empty-state flag.
 //
@@ -57,6 +59,13 @@ use amity_storage::task_instance::list_upcoming_instances;
 // Event override action (to detect cancellations) and the event id type.
 use amity_core::event_override::OverrideAction;
 use amity_core::ids::EventId;
+// `EventSourceKind` distinguishes native from external (Ics) events — external
+// events always route through the instance path (see `build_event_candidates`)
+// because `Event.recurrence` is deliberately left `None` for them even when
+// the source recurs (external recurrence is trusted to the feed, never
+// mirrored onto the native recurrence field — see `amity_core::event`'s doc
+// comment and `jobs::calendar_sync::build_events`).
+use amity_core::event::EventSourceKind;
 // A set of cancelled event ids for the day.
 use std::collections::HashSet;
 
@@ -293,8 +302,11 @@ async fn build_task_candidates(
 
 /// Build the event ranking candidates for `target_date`.
 ///
-/// A one-shot event contributes a candidate on its start date; a recurring event
-/// contributes one per materialised instance on the day. Any event with a
+/// A one-shot NATIVE event contributes a candidate on its start date. Every
+/// other event — a native recurring event, or ANY Ics-sourced event whether
+/// or not it recurs — contributes one candidate per materialised
+/// `event_instances` row on the day (see the `is_native_one_shot` branch
+/// below for why Ics events always take this path). Any event with a
 /// `Cancel` override for the day is dropped entirely. Events use `Scheduled`
 /// timing (they surface on their day and are never overdue) and carry the
 /// all-day flag through so all-day events lead the day.
@@ -348,13 +360,29 @@ async fn build_event_candidates(state: &AppState, target_date: Date) -> Vec<Surf
         if cancelled.contains(&event.id) {
             continue;
         }
-        if event.recurrence.is_none() {
-            // One-shot event: surfaces if its start instant falls on the day.
+        // Route through the instance path whenever `event_instances` rows
+        // actually exist for this event: that is true for any event with a
+        // native recurrence rule, AND for every Ics-sourced event regardless
+        // of whether it recurs — `calendar_sync::materialise_instances`
+        // writes one instance row even for a one-shot external event (see
+        // `expand_external`'s no-RRULE branch), so an Ics event always has at
+        // least its single occurrence materialised. Without this, a
+        // recurring external event's `Event.recurrence` is `None` (by
+        // design — external recurrence is never copied onto it), so it would
+        // wrongly fall into the one-shot `start_at` branch below and never
+        // surface past its very first occurrence.
+        let is_native_one_shot =
+            event.recurrence.is_none() && event.source.kind != EventSourceKind::Ics;
+        if is_native_one_shot {
+            // One-shot NATIVE event: surfaces if its start instant falls on
+            // the day. Native one-shot events have no materialised instance
+            // rows, so `start_at` is the only source of truth for them.
             if event.start_at.date() == target_date {
                 candidates.push(event_candidate(event, event.start_at));
             }
         } else {
-            // Recurring event: one candidate per materialised instance on the day.
+            // Native recurring event, OR any Ics event (one-shot or
+            // recurring): one candidate per materialised instance on the day.
             // Fetch a generous window, then keep only the target-day instances.
             let instances = match list_upcoming_event_instances(
                 &state.db,

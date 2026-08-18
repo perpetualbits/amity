@@ -11,6 +11,10 @@
 // `api` contains one sub-module per entity (inbox, task, …).
 pub mod api;
 pub mod config;
+// `feeds` is Amity's outbound HTTP egress — currently just the ICS feed
+// fetch consumed by `jobs::calendar_sync` (see feeds.rs for the egress
+// guards: timeout, redirect limit, size cap).
+pub mod feeds;
 // `jobs` contains background maintenance tasks spawned from `main`.
 pub mod jobs;
 
@@ -86,8 +90,42 @@ pub fn build_app(db: SqlitePool) -> Router {
         // Surfacing — the one ranked "what's on today" query feeding the Today
         // view, drawing tasks and events into a single mixed-type list.
         .route("/api/v1/surfacing/today", get(api::surfacing::today))
+        // Calendar endpoints — subscribed read-only external ICS feeds (Task 5).
+        // Create and list share a path, split by method, same as events above.
+        // Subscribe: builds + validates a Calendar, inserts it with fresh
+        // (never-synced) sync state; see api/calendar.rs::create_calendar.
+        .route("/api/v1/calendars", post(api::calendar::create_calendar))
+        // List every subscribed calendar, wrapped in a `{ calendars: [...] }`
+        // envelope (unlike the bare-array events list, to leave room for
+        // future pagination metadata).
+        .route(
+            "/api/v1/calendars",
+            get(api::calendar::list_calendars_handler),
+        )
+        // Fetch a single calendar (with its sync state) by id.
+        .route("/api/v1/calendars/{id}", get(api::calendar::get_calendar))
+        // Toggle whether the sync job fetches this feed; the only mutable
+        // field exposed here is `enabled` (see PatchCalendarRequest).
+        .route(
+            "/api/v1/calendars/{id}",
+            patch(api::calendar::patch_calendar),
+        )
+        // Unsubscribe; cascades to the calendar's own events/instances.
+        // `axum::routing::delete` is used fully-qualified since only
+        // `get`/`patch`/`post` are imported by name above.
+        .route(
+            "/api/v1/calendars/{id}",
+            axum::routing::delete(api::calendar::delete_calendar_handler),
+        )
+        // On-demand sync of one feed: calls jobs::calendar_sync::sync_one with
+        // the real feeds::fetch, bypassing the 6-hourly background job's wait.
+        .route(
+            "/api/v1/calendars/{id}/refresh",
+            post(api::calendar::refresh_calendar),
+        )
         // Attach tracing middleware so every request is logged automatically.
-        // `TraceLayer` produces structured spans (method, path, status, latency).
+        // `TraceLayer` produces structured spans (method, path, status, latency)
+        // for every route registered above, calendars included.
         .layer(TraceLayer::new_for_http())
         // Inject shared state into all handlers via axum's `State<AppState>` extractor.
         // Every handler that declares `State(state): State<AppState>` receives a clone.

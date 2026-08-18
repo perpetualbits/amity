@@ -1,13 +1,17 @@
 // event.rs — repository functions for the Event entity.
 //
 // The storage layer's interface for Events. It exposes:
-//   • insert_event   — write a new event
-//   • fetch_event    — read one event by id
-//   • list_events    — read all events, ordered by start time
-//   • update_event   — update a native event's mutable fields
+//   • insert_event                  — write a new event
+//   • fetch_event                   — read one event by id
+//   • list_events                   — read all events, ordered by start time
+//   • update_event                  — update a native event's mutable fields
+//   • upsert_external_events        — insert-or-update ICS-ingested events,
+//                                      keyed on (calendar_id, external_id)
+//   • prune_events_missing_from_feed — delete a calendar's events (and their
+//                                      instances) that vanished from its feed
 //
 // No business logic lives here; the repository reads and writes the `Event`
-// domain type. See migration 0003.
+// domain type. See migrations 0003 and 0004.
 //
 // Storage layout notes:
 //   • The EventSource is flattened onto the events row as `source_*` columns
@@ -20,6 +24,10 @@
 //     time column is a correct chronological sort without a parse step.
 //   • The SELECT column list lives in one const (`EVENT_SELECT`); the fetch and
 //     list queries append their own WHERE / ORDER BY, so it is never duplicated.
+//   • `insert_event`, `update_event`, and `upsert_external_events` share the
+//     transformed-field serialisation (all the columns that need parsing, not
+//     just borrowing) via the private `event_columns` helper, so the three
+//     write paths cannot drift on how a bool/enum/datetime is encoded.
 
 // `SqlitePool` is the shared pool injected into every query function.
 use sqlx::SqlitePool;
@@ -97,27 +105,12 @@ struct EventRow {
 /// Returns `StorageError::Database` on any sqlx failure (e.g. a UUID primary-key
 /// or FK violation), or `StorageError::Parse` if a timestamp cannot be formatted.
 pub async fn insert_event(pool: &SqlitePool, event: &Event) -> Result<(), StorageError> {
-    // Serialise every field to its TEXT/INTEGER storage form up front, so the
-    // bind chain below stays a straight list.
     // UUID newtype → hyphenated string.
     let id = event.id.to_string();
-    // Required start → RFC 3339 TEXT.
-    let start_at = format_dt(event.start_at)?;
-    // Optional end → RFC 3339 TEXT or None.
-    let end_at = format_optional_dt(event.end_at)?;
-    // Booleans are stored as INTEGER 0/1 under STRICT mode.
-    let all_day = i64::from(event.all_day);
-    // Recurrence: both columns present together, or both NULL (one-shot/external).
-    let recurrence_rrule = event.recurrence.as_ref().map(|r| r.rrule.clone());
-    let recurrence_timezone = event.recurrence.as_ref().map(|r| r.timezone.clone());
-    // Flatten the source onto the row's source_* columns.
-    // Enum → 'native' | 'ics'.
-    let source_kind = event.source.kind.to_string();
-    // Read-only flag → 0/1.
-    let source_read_only = i64::from(event.source.read_only);
-    // Optional last-sync time → RFC 3339 TEXT or None.
-    let source_last_synced_at = format_optional_dt(event.source.last_synced_at)?;
-    // Audit timestamps → RFC 3339 TEXT.
+    // Every transformed field (bools/enums/datetimes) comes from the shared
+    // helper so insert/update/upsert cannot drift on how one is encoded.
+    let cols = event_columns(event)?;
+    // Audit timestamps → RFC 3339 TEXT. Both start equal at insert time.
     let created_at = format_dt(event.created_at)?;
     let updated_at = format_dt(event.updated_at)?;
 
@@ -146,27 +139,27 @@ pub async fn insert_event(pool: &SqlitePool, event: &Event) -> Result<(), Storag
     // ?2 title (already validated non-empty by the domain layer).
     .bind(&event.title)
     // ?3 start instant.
-    .bind(start_at)
+    .bind(cols.start_at)
     // ?4 end instant, or SQL NULL.
-    .bind(end_at)
+    .bind(cols.end_at)
     // ?5 all-day flag as 0/1.
-    .bind(all_day)
+    .bind(cols.all_day)
     // ?6 IANA timezone.
     .bind(&event.timezone)
     // ?7 location, or SQL NULL.
     .bind(&event.location)
     // ?8/?9 recurrence rrule + timezone, both NULL for one-shot/external.
-    .bind(recurrence_rrule)
-    .bind(recurrence_timezone)
+    .bind(cols.recurrence_rrule)
+    .bind(cols.recurrence_timezone)
     // ?10 source kind ('native' | 'ics').
-    .bind(source_kind)
+    .bind(cols.source_kind)
     // ?11/?12 external id + calendar id, NULL for native.
     .bind(&event.source.external_id)
     .bind(&event.source.calendar_id)
     // ?13 read-only flag as 0/1.
-    .bind(source_read_only)
+    .bind(cols.source_read_only)
     // ?14 last-sync time, NULL for native.
-    .bind(source_last_synced_at)
+    .bind(cols.source_last_synced_at)
     // ?15/?16 audit timestamps.
     .bind(created_at)
     .bind(updated_at)
@@ -242,21 +235,10 @@ pub async fn list_events(pool: &SqlitePool) -> Result<Vec<Event>, StorageError> 
 /// Returns `StorageError::Database` on sqlx failure, or `StorageError::Parse` if
 /// a timestamp cannot be formatted.
 pub async fn update_event(pool: &SqlitePool, event: &Event) -> Result<(), StorageError> {
-    // Serialise mutable fields, mirroring insert_event but keyed on id in WHERE.
     // The id goes in the WHERE clause, not the SET list.
     let id = event.id.to_string();
-    // Start/end instants.
-    let start_at = format_dt(event.start_at)?;
-    let end_at = format_optional_dt(event.end_at)?;
-    // All-day flag as 0/1.
-    let all_day = i64::from(event.all_day);
-    // Recurrence pair (both or neither).
-    let recurrence_rrule = event.recurrence.as_ref().map(|r| r.rrule.clone());
-    let recurrence_timezone = event.recurrence.as_ref().map(|r| r.timezone.clone());
-    // Flattened source fields.
-    let source_kind = event.source.kind.to_string();
-    let source_read_only = i64::from(event.source.read_only);
-    let source_last_synced_at = format_optional_dt(event.source.last_synced_at)?;
+    // Shared transformed-field serialisation (see insert_event).
+    let cols = event_columns(event)?;
     // updated_at is bumped by the caller before this runs.
     let updated_at = format_dt(event.updated_at)?;
 
@@ -277,27 +259,27 @@ pub async fn update_event(pool: &SqlitePool, event: &Event) -> Result<(), Storag
     // ?1 title.
     .bind(&event.title)
     // ?2 start instant.
-    .bind(start_at)
+    .bind(cols.start_at)
     // ?3 end instant, or NULL.
-    .bind(end_at)
+    .bind(cols.end_at)
     // ?4 all-day flag.
-    .bind(all_day)
+    .bind(cols.all_day)
     // ?5 timezone.
     .bind(&event.timezone)
     // ?6 location, or NULL.
     .bind(&event.location)
     // ?7/?8 recurrence rrule + timezone.
-    .bind(recurrence_rrule)
-    .bind(recurrence_timezone)
+    .bind(cols.recurrence_rrule)
+    .bind(cols.recurrence_timezone)
     // ?9 source kind.
-    .bind(source_kind)
+    .bind(cols.source_kind)
     // ?10/?11 external id + calendar id.
     .bind(&event.source.external_id)
     .bind(&event.source.calendar_id)
     // ?12 read-only flag.
-    .bind(source_read_only)
+    .bind(cols.source_read_only)
     // ?13 last-sync time.
-    .bind(source_last_synced_at)
+    .bind(cols.source_last_synced_at)
     // ?14 updated-at timestamp.
     .bind(updated_at)
     // ?15 id — selects the row to update.
@@ -308,7 +290,216 @@ pub async fn update_event(pool: &SqlitePool, event: &Event) -> Result<(), Storag
     Ok(())
 }
 
+/// Insert-or-update ICS-ingested events, keyed on `(source_calendar_id,
+/// source_external_id)`.
+///
+/// Each event is written with a plain `INSERT ... ON CONFLICT ... DO UPDATE`
+/// against `idx_events_source_unique` (migration 0004). `SQLite` requires the
+/// conflict target to repeat a partial index's predicate
+/// (`WHERE source_calendar_id IS NOT NULL`) or the statement fails at runtime
+/// with "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE
+/// constraint" — so the conflict target below carries that predicate. Only the
+/// mutable fields are updated on conflict (title, timing, location,
+/// recurrence, last-sync time, `updated_at`); identity columns (id, source
+/// kind/external id/calendar id, read-only, `created_at`) are left untouched so
+/// a re-sync never rewrites an event's origin or history. All events in the
+/// slice are written in one transaction.
+///
+/// # Errors
+///
+/// Returns `StorageError::Database` on sqlx failure, or `StorageError::Parse`
+/// if a timestamp cannot be formatted.
+pub async fn upsert_external_events(
+    pool: &SqlitePool,
+    events: &[Event],
+) -> Result<(), StorageError> {
+    // One transaction for the whole batch — a partial sync should not leave
+    // half the feed's events written and half not.
+    let mut tx = pool.begin().await?;
+
+    for event in events {
+        let id = event.id.to_string();
+        let cols = event_columns(event)?;
+        let created_at = format_dt(event.created_at)?;
+        let updated_at = format_dt(event.updated_at)?;
+
+        sqlx::query(
+            "
+            INSERT INTO events (
+                id, title, start_at, end_at, all_day, timezone, location,
+                recurrence_rrule, recurrence_timezone,
+                source_kind, source_external_id, source_calendar_id,
+                source_read_only, source_last_synced_at,
+                created_at, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                ?8, ?9,
+                ?10, ?11, ?12,
+                ?13, ?14,
+                ?15, ?16
+            )
+            ON CONFLICT (source_calendar_id, source_external_id)
+                WHERE source_calendar_id IS NOT NULL
+            DO UPDATE SET
+                title = excluded.title,
+                start_at = excluded.start_at,
+                end_at = excluded.end_at,
+                all_day = excluded.all_day,
+                timezone = excluded.timezone,
+                location = excluded.location,
+                recurrence_rrule = excluded.recurrence_rrule,
+                recurrence_timezone = excluded.recurrence_timezone,
+                source_last_synced_at = excluded.source_last_synced_at,
+                updated_at = excluded.updated_at
+            ",
+        )
+        // Same 16-column bind order as insert_event; on conflict everything
+        // but the SET list above (title..updated_at, minus identity columns)
+        // is ignored in favour of the existing row's values.
+        .bind(id)
+        .bind(&event.title)
+        .bind(cols.start_at)
+        .bind(cols.end_at)
+        .bind(cols.all_day)
+        .bind(&event.timezone)
+        .bind(&event.location)
+        .bind(cols.recurrence_rrule)
+        .bind(cols.recurrence_timezone)
+        .bind(cols.source_kind)
+        .bind(&event.source.external_id)
+        .bind(&event.source.calendar_id)
+        .bind(cols.source_read_only)
+        .bind(cols.source_last_synced_at)
+        .bind(created_at)
+        .bind(updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Delete a calendar's events whose feed UID is not in `keep_external_ids`,
+/// and their materialised instances.
+///
+/// Called after a sync ingests the current feed: `keep_external_ids` is every
+/// UID the feed still contains, so anything stored for this calendar but not
+/// in that list has vanished from the source and should be removed. An empty
+/// `keep_external_ids` (a feed that returned zero events) deletes all of this
+/// calendar's events, since nothing survives. `SQLite` has no implicit cascade
+/// under STRICT, so instances are deleted before their parent events. Returns
+/// the number of `events` rows deleted.
+///
+/// # Errors
+///
+/// Returns `StorageError::Database` on sqlx failure.
+pub async fn prune_events_missing_from_feed(
+    pool: &SqlitePool,
+    calendar_id: &str,
+    keep_external_ids: &[String],
+) -> Result<u64, StorageError> {
+    // Both deletes must agree on which rows "vanished", so run them in one
+    // transaction against the same predicate.
+    let mut tx = pool.begin().await?;
+
+    // Bind ?1 = calendar_id, then one placeholder per kept UID. With no kept
+    // UIDs the NOT IN clause is dropped entirely (an empty `NOT IN ()` is
+    // invalid SQL, and its intended meaning — "nothing survives" — is exactly
+    // "delete every event for this calendar").
+    let predicate = if keep_external_ids.is_empty() {
+        String::new()
+    } else {
+        let placeholders: Vec<String> = (0..keep_external_ids.len())
+            .map(|i| format!("?{}", i + 2))
+            .collect();
+        format!(
+            " AND source_external_id NOT IN ({})",
+            placeholders.join(", ")
+        )
+    };
+
+    let instances_sql = format!(
+        "
+        DELETE FROM event_instances
+        WHERE event_id IN (
+            SELECT id FROM events WHERE source_calendar_id = ?1{predicate}
+        )
+        "
+    );
+    let mut instances_query = sqlx::query(&instances_sql).bind(calendar_id);
+    for uid in keep_external_ids {
+        instances_query = instances_query.bind(uid);
+    }
+    instances_query.execute(&mut *tx).await?;
+
+    let events_sql = format!("DELETE FROM events WHERE source_calendar_id = ?1{predicate}");
+    let mut events_query = sqlx::query(&events_sql).bind(calendar_id);
+    for uid in keep_external_ids {
+        events_query = events_query.bind(uid);
+    }
+    let result = events_query.execute(&mut *tx).await?;
+
+    tx.commit().await?;
+    Ok(result.rows_affected())
+}
+
 // ─── Private helpers ──────────────────────────────────────────────────────────
+
+/// The subset of an event's columns that need transformation (bool → 0/1,
+/// enum → its storage string, `OffsetDateTime` → RFC 3339 TEXT) rather than a
+/// plain borrow.
+///
+/// `id`, `title`, `timezone`, `location`, and the two `source_*` id fields
+/// bind directly from `&event.*` at each call site (no conversion needed), so
+/// they are not part of this struct — only the fields `insert_event`,
+/// `update_event`, and `upsert_external_events` would otherwise each compute
+/// by hand are pulled out here, so the three write paths cannot drift on how
+/// one of them is encoded.
+struct EventColumns {
+    /// RFC 3339 TEXT start instant.
+    start_at: String,
+    /// RFC 3339 TEXT end instant, or `None` for SQL NULL.
+    end_at: Option<String>,
+    /// All-day flag as INTEGER 0/1.
+    all_day: i64,
+    /// RRULE string, or `None` when one-shot/external.
+    recurrence_rrule: Option<String>,
+    /// Recurrence timezone, present iff `recurrence_rrule` is.
+    recurrence_timezone: Option<String>,
+    /// `'native' | 'ics'`.
+    source_kind: String,
+    /// Read-only flag as INTEGER 0/1.
+    source_read_only: i64,
+    /// RFC 3339 TEXT last-sync time, or `None` for native events.
+    source_last_synced_at: Option<String>,
+}
+
+/// Compute the transformed columns shared by every event write path.
+///
+/// # Errors
+///
+/// Returns `StorageError::Parse` if `start_at`, `end_at`, or
+/// `source.last_synced_at` cannot be formatted as RFC 3339.
+fn event_columns(event: &Event) -> Result<EventColumns, StorageError> {
+    Ok(EventColumns {
+        // Required start → RFC 3339 TEXT.
+        start_at: format_dt(event.start_at)?,
+        // Optional end → RFC 3339 TEXT or None.
+        end_at: format_optional_dt(event.end_at)?,
+        // Booleans are stored as INTEGER 0/1 under STRICT mode.
+        all_day: i64::from(event.all_day),
+        // Recurrence: both columns present together, or both NULL.
+        recurrence_rrule: event.recurrence.as_ref().map(|r| r.rrule.clone()),
+        recurrence_timezone: event.recurrence.as_ref().map(|r| r.timezone.clone()),
+        // Enum → 'native' | 'ics'.
+        source_kind: event.source.kind.to_string(),
+        // Read-only flag → 0/1.
+        source_read_only: i64::from(event.source.read_only),
+        // Optional last-sync time → RFC 3339 TEXT or None.
+        source_last_synced_at: format_optional_dt(event.source.last_synced_at)?,
+    })
+}
 
 /// Column list + FROM for the `events` table. Single source of truth for the
 /// select shape; `fetch_event` appends `WHERE id = ?1` and `list_events` an

@@ -22,6 +22,10 @@ thiserror = { workspace = true }
 # rule parsing and DST-correct instance generation. See ADR-0002.
 rrule  = { workspace = true }
 chrono = { workspace = true }
+# ICS parsing for external calendar feeds (pure text→struct, no I/O).
+ical = { workspace = true }
+# Structured logging for the "malformed VEVENT, skip and log" path in ics.rs.
+tracing = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

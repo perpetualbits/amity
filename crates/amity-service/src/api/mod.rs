@@ -19,7 +19,14 @@
 //   POST  /api/v1/tasks/{id}/assignee    — change current_assignee_id
 //   GET   /api/v1/tasks/{id}/history     — list completion log entries
 //   GET   /api/v1/surfacing/today        — ranked "what's on today" query
+//   POST  /api/v1/calendars              — subscribe to a new ICS feed
+//   GET   /api/v1/calendars              — list subscribed calendars
+//   GET   /api/v1/calendars/{id}         — fetch one calendar (+ sync state)
+//   PATCH /api/v1/calendars/{id}         — enable/disable a subscription
+//   DELETE /api/v1/calendars/{id}        — unsubscribe (cascades its events)
+//   POST  /api/v1/calendars/{id}/refresh — sync one feed on demand
 
+pub mod calendar;
 pub mod event;
 pub mod inbox;
 pub mod surfacing;
