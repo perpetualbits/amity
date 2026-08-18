@@ -11,6 +11,10 @@
 // `api` contains one sub-module per entity (inbox, task, …).
 pub mod api;
 pub mod config;
+// `feeds` is Amity's outbound HTTP egress — currently just the ICS feed
+// fetch consumed by `jobs::calendar_sync` (see feeds.rs for the egress
+// guards: timeout, redirect limit, size cap).
+pub mod feeds;
 // `jobs` contains background maintenance tasks spawned from `main`.
 pub mod jobs;
 
