@@ -1,6 +1,6 @@
 # Amity — Project Status Report
 
-*Living handoff document. Last updated 2026-08-19 at `main` = `59a612a`.*
+*Living handoff document. Last updated 2026-08-19 (Task 6 backend shipped; hub half blocked — see below).*
 *Update this file whenever a task lands (it is the source of truth Claude.ai reads to prepare the next prompt).*
 
 ## Working model (henceforth)
@@ -38,13 +38,16 @@ Rust **Cargo workspace**, three crates with a strict dependency direction:
   background **jobs** (`recurrence_horizon`, `calendar_sync`), and `feeds` (the
   one outbound egress). Loopback-only.
 - **`apps/hub-tauri`** — SolidJS + Tauri v2 frontend (`Capture`, `Today` views).
-  **Deliberately outside the workspace** — needs WebKit2GTK, absent on the dev
-  machine, so it can only `vite build` (type-check), never run live here.
+  **Deliberately outside the workspace** (its own `[workspace]` root as of Task 6).
+  WebKit2GTK **is now installed** (2.52.3), and `vite build` (frontend) passes —
+  but the **native Tauri side does not compile** (see the blocker below), so the
+  hub still cannot run live here. It had only ever been `vite build`-checked, which
+  hid this.
 
 **ADRs:** `0001` initial architecture · `0002` recurrence engine · `0003`
 deferred task fields · `0004` external calendar ingestion.
 
-## What's been built (Tasks 1–5, all shipped to `main`)
+## What's been built (Tasks 1–5 on `main`; Task 6 backend on branch `task-6-hub-live-week`)
 
 | Task | Area | State |
 |---|---|---|
@@ -53,6 +56,21 @@ deferred task fields · `0004` external calendar ingestion.
 | **3** | **Surfacing** + **Today** view (`rank_today`, kind-agnostic ranking) | done |
 | **4** | **Event** entity + calendar surfacing on Today | done |
 | **5** | **ICS ingestion & external calendars** (read-only aggregation) | done |
+| **6** | Event **overrides** in surfacing + **Week view backend** | **backend done; hub UI blocked** |
+
+**Task 6 detail** (most recent): **Slice 1** — `Reschedule` and `Annotate`
+overrides now apply in surfacing (only `Cancel` did before), on the shared
+instance path so external/recurring events are covered; guarded by e2e incl. the
+external-recurring seam. **Slice 2a** — a pure, clock-injected `plan_week`
+planner (Monday-start 7-day buckets, overrides applied, open tasks only, layout
+not ranking) + `GET /api/v1/week?start=` endpoint; `candidate_to_item` factored
+and shared with `rank_today`. Both review-clean. **Chore-rotation check (Slice 3):**
+confirmed there is **no automatic rotation/assignment algorithm** — chores are
+recurrence + an *optional manual* assignee (instances inherit the parent's, per-
+instance overridable); the code explicitly disavows auto-fairness ("planner, not
+mediator"). **Blocked (Slices 0 + 2b):** the hub's native side won't compile —
+see the blocker below — so the live prototype and the Week **UI** are deferred to
+a follow-up. The Week **backend** is ready and tested behind `/api/v1/week`.
 
 **Task 5 detail** (most recent): a `Calendar` entity; pure iCalendar
 `parse_feed`/`expand_external` (via `ical` + `rrule` crates, DST-correct);
@@ -70,9 +88,11 @@ the egress guards were then added (mutation-verified to bite).
 
 ## Repository health (as of this update)
 
-- **`main` = `59a612a`, in sync with `origin/main`.** Clean tree.
-- **174 tests passing** across 19 suites; **`cargo fmt` clean; `clippy -W
-  clippy::pedantic` 0 warnings; comment-density gate 0 failures.**
+- Task 6 backend on branch **`task-6-hub-live-week`** (Slices 1 + 2a + the hub
+  `[workspace]` fix), merging to `main` after final review.
+- **197 tests passing**; **`cargo fmt` clean; `clippy -W clippy::pedantic` 0
+  warnings; comment-density gate 0 failures.** (Backend only — the hub native
+  build is a separate, blocked concern; see the blocker.)
 - Migrations `0001`–`0004`; a live `project-map.js` at repo root tracks status
   (keep it in sync on changes).
 
@@ -103,40 +123,70 @@ then P3:
 - **P1** Data model + inbox + Today — done
 - **P2** Meals, Lists & Pantry (meal→groceries pipeline) — **not built;
   leapfrogged; largest unbuilt phase; core to the MVP definition-of-done**
-- **P3** Calendar aggregation + EventOverride + recurrence — done *(except: only
-  the **Cancel** override is wired to surfacing; **Reschedule/Annotate** are not)*
+- **P3** Calendar aggregation + EventOverride + recurrence — done *(all three
+  overrides — Cancel/Reschedule/Annotate — now wired to surfacing, Task 6)*
 - **P4** Tasks + recurrence + CompletionLog + chores — core done *(chore views
   partial)*
 - **P5** Notifications (three-level) + hub-at-rest + LED — not built
 - **P6** Polish + accessibility + pilot — not built
 
+## ⛔ Hub build blocker (Task 6 — the reason the hub half is deferred)
+
+The hub's **native (Tauri) side does not compile on this machine**, and never had
+(it was only ever `vite build`-checked). Bringing it up for Task 6 surfaced:
+
+- **Fixed:** `src-tauri` was silently pulled into the amity Cargo workspace →
+  gave it its own empty `[workspace]` root (commit on the branch).
+- **Blocking (upstream):** `tauri-macros 2.6.3` (the latest — `cargo update` finds
+  nothing newer) generates a `#[tauri::command]` helper as `macro_rules! X; use X;`
+  in one module, which rustc rejects as **E0255 "defined multiple times."** It
+  fails on **every rustc from 1.88 to 1.95** (deps need ≥1.88; the E0255 is present
+  by 1.90), so no toolchain in range works. Edition 2021↔2024 makes no difference.
+  A bounded Tauri **downgrade** attempt cascaded into a `tauri-build`/`tauri-utils`
+  mismatch — a full `tauri-*`-family pin would be needed.
+
+**To unblock later (a follow-up task):** wait for an upstream `tauri-macros`
+release, or pin the whole `tauri-*` family to a consistent older set on stable
+rustc, then verify `cargo build` in `apps/hub-tauri/src-tauri`, add a `run-hub`
+launch script + prereq doc (Ubuntu deps: `libwebkit2gtk-4.1-dev build-essential
+curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`),
+and build the Week **UI** against the ready `/api/v1/week` endpoint.
+
 ## Known carry-overs / deferred items (none blocking)
 
-- **Event overrides:** only `Cancel` is applied to surfacing;
-  `Reschedule`/`Annotate` are unwired.
-- **Hub frontend has no JS test runner**; and it can't run live here (no
-  WebKit2GTK) — only `vite build`.
+- **Hub live prototype + Week UI** — deferred by the blocker above (the roadmap
+  "next" marker points here).
+- **Hub frontend has no JS test runner** — only `vite build` type-checks it.
 - Optional **ICS Task 7** (read-only Calendars list in the hub) was not built.
+- Minor (from Task 6 reviews): a **pre-existing** Cancel-vs-later-overlay
+  precedence gap ("cancel then reschedule" still shows cancelled) — a maintainer
+  decision; cross-day reschedule silently drops an instance (out of scope); the
+  `/week` handler does per-day reads (N+1, fine at household scale).
 - `calendar_sync`'s per-event sweep + batched upsert **aren't wrapped in one
   transaction** (self-healing next 6 h cycle).
 - `SyncReport.calendars_synced` counts **attempts, not successes**; no direct
   test for `delete_calendar`'s instance cascade (code verified by inspection).
 
-## Open decision: what is Task 6?
+## Open decision: what's next?
 
-No successor is defined anywhere in the repo (`project-map.js` itself notes
-this), so the roadmap's "next" marker is currently **empty**. Strongest
-candidates:
+The roadmap "next" marker now points at the **Task 6 follow-up — hub live + Week
+UI**, which is **blocked upstream** (see the hub blocker). Claude.ai decides
+whether to:
 
-1. **P2 · Meals, Lists & Pantry** — the skipped early phase; central to the MVP
-   "definition of done"; largest chunk.
-2. **Finish event overrides** (Reschedule/Annotate → surfacing) — completes P3;
-   small.
-3. **P5 · Notifications + hub-at-rest** — later in the sketch but a substantial
-   phase.
-4. **Hub Calendars list** (optional ICS Task 7) — small; rounds out the ICS UX.
+1. **Wait out / fix the hub blocker**, then finish the visible prototype (Slice 0
+   live bring-up + Slice 2b Week UI against the ready `/week` endpoint). This is
+   what "next" currently names, but it depends on an upstream `tauri-macros` fix
+   or a full `tauri-*` family downgrade.
+2. **P2 · Meals, Lists & Pantry** — the skipped early phase; central to the MVP
+   "definition of done"; the largest unbuilt chunk. A good backend-only choice
+   that sidesteps the hub blocker entirely.
+3. **P5 · Notifications + hub-at-rest** — later in the sketch; substantial.
+
+Recommendation for Claude.ai: if the hub blocker isn't quickly resolvable
+upstream, pick **P2** next (pure backend, unblocked, high MVP value) and keep the
+hub follow-up marked as blocked until Tauri is fixed.
 
 Once Claude.ai picks, the Claude Code prompt should: name the task + acceptance
 criteria, point at the relevant existing patterns to mirror, restate the
 guardrails above, and (for a multi-slice feature) ask for a brief plan first.
-Claude Code then sets the `project-map.js` "next" marker as part of that work.
+Claude Code then updates the `project-map.js` "next" marker as part of that work.
