@@ -129,6 +129,15 @@ pub struct SurfaceCandidate {
 
     /// The member shown as responsible. May be `None`.
     pub current_assignee_id: Option<MemberId>,
+
+    /// A household note from an `Annotate` override, if one applies to this
+    /// instance; `None` for every candidate an override has not touched.
+    pub annotation: Option<String>,
+
+    /// True when a `Reschedule` override moved this instance's `timing` away
+    /// from its originally-scheduled time. Tasks and un-overridden events
+    /// always carry `false`.
+    pub rescheduled: bool,
 }
 
 // ─── SurfacedItem ───────────────────────────────────────────────────────────
@@ -168,6 +177,12 @@ pub struct SurfacedItem {
 
     /// The member shown as responsible, if any.
     pub current_assignee_id: Option<MemberId>,
+
+    /// A household note from an `Annotate` override on this instance, if any.
+    pub annotation: Option<String>,
+
+    /// True when a `Reschedule` override moved this instance to a new time.
+    pub rescheduled: bool,
 }
 
 // ─── SurfacingConfig ────────────────────────────────────────────────────────
@@ -301,6 +316,10 @@ fn evaluate(candidate: SurfaceCandidate, date: Date, now: OffsetDateTime) -> Opt
         priority: candidate.priority,
         // The member shown as responsible, if any.
         current_assignee_id: candidate.current_assignee_id,
+        // Move the override-derived fields straight through — the rule does
+        // not interpret them, it only carries what the caller resolved.
+        annotation: candidate.annotation,
+        rescheduled: candidate.rescheduled,
     })
 }
 
@@ -513,6 +532,9 @@ mod tests {
             priority: None,
             // Assigned to the placeholder member so the filter test has a subject.
             current_assignee_id: Some(member()),
+            // No override machinery under test here — tasks never carry one.
+            annotation: None,
+            rescheduled: false,
         }
     }
 
@@ -536,6 +558,10 @@ mod tests {
             priority: None,
             // No assignee on events in these tests.
             current_assignee_id: None,
+            // Override fields are exercised by the service-layer e2e tests,
+            // not the pure-rule tests here — default them off.
+            annotation: None,
+            rescheduled: false,
         }
     }
 

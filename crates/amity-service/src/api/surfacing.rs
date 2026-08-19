@@ -56,8 +56,9 @@ use amity_storage::event_instance::list_upcoming_event_instances;
 use amity_storage::event_override::list_overrides_on_date;
 use amity_storage::task::{TaskFilter, list_tasks};
 use amity_storage::task_instance::list_upcoming_instances;
-// Event override action (to detect cancellations) and the event id type.
-use amity_core::event_override::OverrideAction;
+// Event override action/type (to detect cancellations and apply the rest) and
+// the event id type used to key the day's overrides.
+use amity_core::event_override::{EventOverride, OverrideAction};
 use amity_core::ids::EventId;
 // `EventSourceKind` distinguishes native from external (Ics) events — external
 // events always route through the instance path (see `build_event_candidates`)
@@ -66,8 +67,9 @@ use amity_core::ids::EventId;
 // mirrored onto the native recurrence field — see `amity_core::event`'s doc
 // comment and `jobs::calendar_sync::build_events`).
 use amity_core::event::EventSourceKind;
-// A set of cancelled event ids for the day.
-use std::collections::HashSet;
+// A set of cancelled event ids for the day, and a lookup from event id to the
+// day's applicable (non-cancel) override.
+use std::collections::{HashMap, HashSet};
 
 // `AppState` carries the shared `SqlitePool`.
 use crate::AppState;
@@ -113,6 +115,11 @@ pub struct SurfacedItemResponse {
     /// UUID string of the member shown as responsible; omitted when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_assignee_id: Option<String>,
+    /// A household note from an `Annotate` override; omitted when there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<String>,
+    /// True when a `Reschedule` override moved this instance to a new time.
+    pub rescheduled: bool,
 }
 
 /// JSON envelope returned by the Today endpoint.
@@ -254,6 +261,9 @@ async fn build_task_candidates(
                 priority: task.priority,
                 // The member shown as responsible, if set.
                 current_assignee_id: task.current_assignee_id,
+                // Overrides target events only; tasks never carry one.
+                annotation: None,
+                rescheduled: false,
             });
         } else {
             // ── Recurring task: one candidate per instance on the day ───────
@@ -290,6 +300,9 @@ async fn build_task_candidates(
                         priority: task.priority,
                         // Prefer the instance's assignee; fall back to the task's.
                         current_assignee_id: inst.current_assignee_id.or(task.current_assignee_id),
+                        // Overrides target events only; tasks never carry one.
+                        annotation: None,
+                        rescheduled: false,
                     });
                 }
             }
@@ -311,10 +324,18 @@ async fn build_task_candidates(
 /// timing (they surface on their day and are never overdue) and carry the
 /// all-day flag through so all-day events lead the day.
 ///
-/// Only Cancel overrides are applied here (they drop the instance). Reschedule
-/// and annotate overrides are recorded but not yet reflected — the overlay rows
-/// exist; applying them to surfacing (moving the time, attaching a note) is a
-/// bounded follow-up, documented in `docs/task_4_event_and_calendar.md`.
+/// All three override actions are applied here. `Cancel` drops the instance
+/// entirely (see `cancelled`, below). `Reschedule` and `Annotate` are applied
+/// per instance via the `applied` lookup keyed by `source_event_id`: a
+/// `Reschedule` replaces the candidate's salient time with the payload's
+/// parsed instant and sets `rescheduled`; an `Annotate` attaches the payload
+/// as `annotation` and leaves timing untouched. Because each event
+/// contributes at most one candidate for `target_date` (the one-shot branch
+/// picks `start_at`; the instance branch keeps only the day's matching row),
+/// replacing that candidate's time in place is enough to guarantee the
+/// original slot never also surfaces — there is only ever one row to begin
+/// with. A malformed `Reschedule` payload logs a warning and falls back to
+/// the original time rather than panicking.
 ///
 /// A storage read failure degrades to an empty event contribution rather than
 /// failing the whole surfacing query, so tasks still surface if events cannot
@@ -344,6 +365,27 @@ async fn build_event_candidates(state: &AppState, target_date: Date) -> Vec<Surf
         .filter(|o| o.action == OverrideAction::Cancel)
         .map(|o| o.source_event_id)
         .collect();
+    // The day's Reschedule/Annotate overrides, keyed by the event they target.
+    // An event has at most one override per instance_date in normal use, but
+    // overlays are append-only (no update/delete), so if more than one was
+    // ever recorded for the same instance, the most recently created one wins
+    // — "a change of mind is a new overlay" (event_override.rs's doc comment).
+    let mut applied: HashMap<EventId, &EventOverride> = HashMap::new();
+    for o in &overrides {
+        // Cancel is handled separately above; skip it here.
+        if o.action == OverrideAction::Cancel {
+            continue;
+        }
+        applied
+            .entry(o.source_event_id)
+            .and_modify(|existing| {
+                // Keep whichever overlay was created last.
+                if o.created_at > existing.created_at {
+                    *existing = o;
+                }
+            })
+            .or_insert(o);
+    }
 
     // Lower bound for the per-event instance query, mirroring the task path.
     // Two days back so a local-midnight instance that lands in the prior UTC day
@@ -378,7 +420,14 @@ async fn build_event_candidates(state: &AppState, target_date: Date) -> Vec<Surf
             // the day. Native one-shot events have no materialised instance
             // rows, so `start_at` is the only source of truth for them.
             if event.start_at.date() == target_date {
-                candidates.push(event_candidate(event, event.start_at));
+                candidates.push(event_candidate(
+                    // The event and its default (un-overridden) start time.
+                    event,
+                    event.start_at,
+                    // A native one-shot event can still carry a Reschedule or
+                    // Annotate for its single occurrence.
+                    applied.get(&event.id).copied(),
+                ));
             }
         } else {
             // Native recurring event, OR any Ics event (one-shot or
@@ -401,7 +450,14 @@ async fn build_event_candidates(state: &AppState, target_date: Date) -> Vec<Surf
             // Keep only the instances that land on the target day.
             for inst in instances {
                 if inst.scheduled_at.date() == target_date {
-                    candidates.push(event_candidate(event, inst.scheduled_at));
+                    candidates.push(event_candidate(
+                        // The event and this materialised instance's time.
+                        event,
+                        inst.scheduled_at,
+                        // The same per-event override lookup used above —
+                        // this is the seam that also covers external events.
+                        applied.get(&event.id).copied(),
+                    ));
                 }
             }
         }
@@ -411,12 +467,69 @@ async fn build_event_candidates(state: &AppState, target_date: Date) -> Vec<Surf
     candidates
 }
 
-/// Build an Event-kind `SurfaceCandidate` at the given salient instant.
+/// Build an Event-kind `SurfaceCandidate` at the given salient instant,
+/// applying `override_for_event` (this event's Reschedule/Annotate overlay for
+/// the day, if any — `None` means no non-Cancel override targets it today).
 ///
 /// `at` is the event's start (one-shot) or an instance's scheduled time
-/// (recurring). Events carry no priority or assignee and are never overdue, so
-/// the rule orders them purely by time (all-day first).
-fn event_candidate(event: &amity_core::event::Event, at: OffsetDateTime) -> SurfaceCandidate {
+/// (recurring); it is the instant that lands on `target_date`, so a
+/// `Reschedule` payload is expected to name a time on that same day (Slice 1
+/// does not support a cross-day reschedule — see `build_event_candidates`'s
+/// caller-level doc). Events carry no priority or assignee and are never
+/// overdue, so the rule orders them purely by time (all-day first).
+fn event_candidate(
+    event: &amity_core::event::Event,
+    at: OffsetDateTime,
+    override_for_event: Option<&EventOverride>,
+) -> SurfaceCandidate {
+    // Defaults for an un-overridden instance; each branch below may replace
+    // the time and/or set the annotation.
+    // The salient time, unless a Reschedule below replaces it.
+    let mut surfaced_at = at;
+    // Flips true only when a Reschedule payload parses successfully.
+    let mut rescheduled = false;
+    // Set only by an Annotate override; stays `None` otherwise.
+    let mut annotation = None;
+
+    if let Some(overlay) = override_for_event {
+        // Dispatch on the overlay's action; Cancel cannot reach here (its
+        // events are filtered out before any candidate is built).
+        match overlay.action {
+            // Reparse the payload as the new instant; a malformed value is
+            // logged and the original time is kept rather than panicking.
+            OverrideAction::Reschedule => match overlay
+                .payload
+                .as_deref()
+                .map(|p| OffsetDateTime::parse(p, &Rfc3339))
+            {
+                Some(Ok(new_at)) => {
+                    surfaced_at = new_at;
+                    rescheduled = true;
+                }
+                Some(Err(e)) => {
+                    tracing::warn!(
+                        event_id = %event.id,
+                        payload = ?overlay.payload,
+                        error = %e,
+                        "malformed reschedule payload; keeping original time"
+                    );
+                }
+                // A Reschedule with no payload at all is equally malformed.
+                None => {
+                    tracing::warn!(
+                        event_id = %event.id,
+                        "reschedule override has no payload; keeping original time"
+                    );
+                }
+            },
+            // The note passes straight through; timing is untouched.
+            OverrideAction::Annotate => annotation.clone_from(&overlay.payload),
+            // Cancel never reaches this function (its events are skipped
+            // before any candidate is built) — nothing to apply here.
+            OverrideAction::Cancel => {}
+        }
+    }
+
     SurfaceCandidate {
         // Events are the second surfacable kind (the seam made real).
         kind: SurfacedKind::Event,
@@ -426,13 +539,18 @@ fn event_candidate(event: &amity_core::event::Event, at: OffsetDateTime) -> Surf
         title: event.title.clone(),
         // Events are always live until they have passed; there is no Done state.
         liveness: Liveness::Live,
-        // A fixed occurrence: surfaces on its day, never overdue.
-        timing: Timing::Scheduled(at),
+        // A fixed occurrence: surfaces on its day, never overdue. `surfaced_at`
+        // is either the original instant or the Reschedule's new one.
+        timing: Timing::Scheduled(surfaced_at),
         // All-day events lead the day; timed ones sort by time.
         all_day: event.all_day,
         // Events carry no priority and no assignee.
         priority: None,
         current_assignee_id: None,
+        // Set only by an Annotate override targeting this instance.
+        annotation,
+        // Set only by a successfully-parsed Reschedule override.
+        rescheduled,
     }
 }
 
@@ -457,6 +575,9 @@ fn surfaced_item_to_response(item: &SurfacedItem) -> SurfacedItemResponse {
         priority: item.priority.map(amity_core::task::Priority::value),
         // Assignee UUID string, or omitted when unset.
         current_assignee_id: item.current_assignee_id.map(|m| m.to_string()),
+        // Carry the override-derived fields straight through to the wire.
+        annotation: item.annotation.clone(),
+        rescheduled: item.rescheduled,
     }
 }
 
