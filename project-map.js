@@ -28,7 +28,7 @@ window.PROJECT_MAP = {
     name: "amity",
     tagline: "a peaceful home — project map",
     repo: "github.com/perpetualbits/amity",
-    updated: "2026-08-18",
+    updated: "2026-08-19",
   },
 
   // ── Status vocabulary ─────────────────────────────────────────────────────
@@ -611,7 +611,7 @@ window.PROJECT_MAP = {
       parts: [
         { label: "Local-first / loopback-only", status: "done", desc: "The service does not listen beyond localhost; all data is created and read on the device." },
         { label: "Categorical commitments", status: "done", desc: "Enforced by architecture — no telemetry, no always-on capture, no commercial data flow. Outbound traffic is limited to user-initiated/scheduled read-only calendar-feed fetches (see below), never surveillance or profiling." },
-        { label: "ICS fetch egress guards (ADR-0004)", status: "done", desc: "Task 5's outbound fetch — the system's first — is bounded by a scheme allow-list (http/https only), a 20s timeout, a 5 MiB cap enforced while streaming, a 5-redirect bound, and no compression compiled in; it sends no household data, only a plain GET of the configured feed URL." },
+        { label: "ICS fetch egress guards (ADR-0004)", status: "done", desc: "Task 5's outbound fetch — the system's first — is bounded by a scheme allow-list (http/https only), a 20s timeout, a 5 MiB cap enforced while streaming, a 5-redirect bound, and no compression compiled in; it sends no household data, only a plain GET of the configured feed URL. Each guard (size cap incl. the at-cap boundary, non-2xx, redirect bound) is exercised by HTTP-level tests against a local mock server — crates/amity-service/tests/feeds_egress.rs." },
         { label: "Two-tier governance", status: "planned", desc: "Admin / member, with admins content-blind to private items." },
         { label: "Per-item privacy / no admin reveal", status: "planned", desc: "Owner-set visibility; no override exposes a child's private item." },
         { label: "Change log & audit", status: "planned", desc: "Factual 90-day record; no blame view, no monitoring." },
