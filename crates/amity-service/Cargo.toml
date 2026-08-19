@@ -49,3 +49,5 @@ reqwest     = { workspace = true }
 tokio       = { workspace = true }
 tower       = { workspace = true }
 axum        = { workspace = true }
+# Local HTTP mock server for the feeds::fetch egress-guard tests.
+wiremock    = { workspace = true }

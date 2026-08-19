@@ -56,6 +56,11 @@ tower-http  = { version = "0.6", features = ["trace"] }
 # Outbound HTTP (ICS feeds, weather). rustls only — no OpenSSL dependency.
 reqwest     = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 
+# Test-only: a real local HTTP mock server for exercising feeds::fetch's egress
+# guards (size cap, non-2xx, redirect bound) at the HTTP layer. Dev-dependency
+# of amity-service only; never linked into the service binary.
+wiremock    = { version = "0.6" }
+
 # Database — both sqlite and postgres features so schema stays portable.
 sqlx        = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres", "uuid", "time", "migrate"] }
 
