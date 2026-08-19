@@ -30,8 +30,9 @@
 
 // Serde derives let `SurfacedItem` cross the JSON API boundary unchanged.
 use serde::{Deserialize, Serialize};
-// `Date` is the day we surface for; `OffsetDateTime` is the salient instant.
-use time::{Date, OffsetDateTime};
+// `Date` is the day we surface for; `OffsetDateTime` is the salient instant;
+// `Duration` steps `Date` forward across the 7-day week window.
+use time::{Date, Duration, OffsetDateTime};
 
 // `MemberId` is the displayed assignee; `Priority` orders items within a day.
 use crate::ids::MemberId;
@@ -298,9 +299,24 @@ fn evaluate(candidate: SurfaceCandidate, date: Date, now: OffsetDateTime) -> Opt
     // `timing_on_day` carries all the rule logic; `?` short-circuits to None
     // when the candidate makes no claim on the day.
     let (at, overdue) = timing_on_day(candidate.timing, date, now)?;
-    // Project the surviving candidate into the wire item. Copy fields carry over
-    // directly; the salient time and overdue flag come from the rule above.
-    Some(SurfacedItem {
+    // Project the surviving candidate into the wire item via the shared
+    // mapping helper — `plan_week` calls the same one, so Today and Week never
+    // drift on what a `SurfacedItem` carries.
+    Some(candidate_to_item(candidate, at, overdue))
+}
+
+/// Project a surviving candidate into the wire `SurfacedItem`, given the
+/// salient instant and overdue flag the caller's rule already resolved.
+///
+/// This is the ONE mapping from `SurfaceCandidate` to `SurfacedItem` in the
+/// crate — `evaluate` (behind `rank_today`) and `plan_week` both call it, so a
+/// field added to either type only ever has to be wired through once.
+fn candidate_to_item(
+    candidate: SurfaceCandidate,
+    at: OffsetDateTime,
+    overdue: bool,
+) -> SurfacedItem {
+    SurfacedItem {
         // Entity type — Task or Event.
         kind: candidate.kind,
         // Move the id/title out of the candidate — no clone needed.
@@ -320,7 +336,7 @@ fn evaluate(candidate: SurfaceCandidate, date: Date, now: OffsetDateTime) -> Opt
         // not interpret them, it only carries what the caller resolved.
         annotation: candidate.annotation,
         rescheduled: candidate.rescheduled,
-    })
+    }
 }
 
 /// Apply the ratified "surfaces on today" rule to one temporal anchor.
@@ -403,6 +419,176 @@ fn member_matches(item: &SurfacedItem, config: &SurfacingConfig) -> bool {
     config
         .member_filter
         .is_none_or(|m| item.current_assignee_id == Some(m))
+}
+
+// ─── Week planning ──────────────────────────────────────────────────────────
+//
+// `plan_week` is Week's counterpart to `rank_today`: same clock-injection
+// discipline, same candidate shape, same shared `candidate_to_item` mapping —
+// but it is a LAYOUT, not a ranking. There is no priority tiebreak and no
+// "overdue, so it's sticky forever" behaviour; each candidate is placed on the
+// one day its salient instant actually falls on, and the day either shows it
+// or it does not. See the module-level design note in the module doc comment
+// for how this differs from Today's rule.
+
+/// One day's worth of surfaced items in a `WeekPlan`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeekDay {
+    /// The calendar date this bucket is for.
+    pub date: Date,
+    /// The items placed on this day, already ordered (see `plan_week`).
+    pub items: Vec<SurfacedItem>,
+}
+
+/// The outcome of laying out a 7-day window — the wire type behind
+/// `GET /api/v1/week`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeekPlan {
+    /// The Monday the week starts on.
+    pub start: Date,
+    /// Exactly 7 `WeekDay` buckets, `start` through `start + 6 days`, in order.
+    pub days: Vec<WeekDay>,
+}
+
+/// Lay out the 7-day window starting at `week_start` (the Monday).
+///
+/// Unlike `rank_today`, this is not a ranked query — it is a placement of what
+/// *is*: each live candidate is bucketed onto the single day its instance
+/// falls on, in date order, with no priority scoring. The pipeline:
+///
+///   1. drop settled task candidates (done/skipped never appear; events are
+///      always `Liveness::Live` already, so this only ever filters tasks —
+///      see brief: "open (not-done) dated tasks only");
+///   2. find the ONE day in the window each candidate's instance falls on, by
+///      reusing `timing_on_day` per day and keeping the day whose date equals
+///      the salient instant's own date (see the note on duplicate one-shot
+///      candidates below);
+///   3. apply `config.member_filter`, exactly as `rank_today` does;
+///   4. map the survivor to a `SurfacedItem` via the shared `candidate_to_item`
+///      helper, and push it into that day's bucket;
+///   5. sort each bucket: all-day first, then events before tasks, then by
+///      salient time ascending, then source id for a deterministic tiebreak.
+///
+/// Candidates outside `[week_start, week_start + 6]` — including a `Window`
+/// task whose window never touches the week at all — are silently dropped, the
+/// same "no claim, no surfacing" silence `rank_today` uses (module doc comment).
+///
+/// ## Why step 2 needs the `at.date() == day` guard, not a bare day loop
+///
+/// `timing_on_day`'s overdue-open branch (`due < now`) is deliberately
+/// day-independent for Today: an overdue task should surface no matter which
+/// day you ask about, because Today always means "right now". Naively
+/// searching the 7 window days for the first one `timing_on_day` returns
+/// `Some` for would hit that branch on EVERY day of the week and wrongly place
+/// the task on `week_start` regardless of its real due date. Re-checking that
+/// the returned salient instant's OWN date equals the day under test collapses
+/// this back to exactly one placement — the due (or earliest) day — which is
+/// the correct one for a layout that shows each thing once, where it belongs.
+///
+/// ## Why the caller may hand in duplicate one-shot task candidates
+///
+/// The service builds one day's task/event candidates at a time (reusing the
+/// same per-day builders `GET /api/v1/surfacing/today` uses) and concatenates
+/// all 7 days' candidates before calling this function. A recurring task or
+/// event is naturally day-scoped by that builder (each day contributes only
+/// its own instance), but a ONE-SHOT task's `Window` candidate is NOT — the
+/// builder does not know or care which day it is being asked for, since the
+/// rule alone decides relevance. Concatenated across 7 calls, the exact same
+/// one-shot task therefore arrives as 7 *identical* candidates. Left alone
+/// they would all resolve to the same placement day and appear 7 times over.
+/// This function guards against that by skipping a candidate whose resulting
+/// `(kind, source_id, at)` already has an entry in that day's bucket — the
+/// only way three fields coincide exactly is that they are the same instance
+/// arriving twice, since a genuinely distinct instance of a recurring series
+/// always carries a distinct `at`.
+#[must_use]
+pub fn plan_week(
+    candidates: Vec<SurfaceCandidate>,
+    week_start: Date,
+    now: OffsetDateTime,
+    config: &SurfacingConfig,
+) -> WeekPlan {
+    // The 7 calendar dates this plan covers, Monday-first (whatever weekday
+    // `week_start` actually is — the caller is trusted to hand in the Monday;
+    // this function only lays out 7 consecutive days from it).
+    let week_dates: Vec<Date> = (0_i64..7)
+        .map(|offset| week_start + Duration::days(offset))
+        .collect();
+
+    // One accumulator bucket per day, indexed the same as `week_dates`.
+    let mut buckets: Vec<Vec<SurfacedItem>> = vec![Vec::new(); 7];
+
+    for candidate in candidates {
+        // Settled tasks never appear (open-only rule); events are always Live
+        // already, so this filter only ever removes tasks in practice.
+        if candidate.liveness != Liveness::Live {
+            continue;
+        }
+
+        // Find the single week day this candidate's instance lands on, if
+        // any — see the doc comment above for why the extra date check matters.
+        let placement = week_dates.iter().enumerate().find_map(|(idx, &day)| {
+            let (at, overdue) = timing_on_day(candidate.timing, day, now)?;
+            (at.date() == day).then_some((idx, at, overdue))
+        });
+        let Some((idx, at, overdue)) = placement else {
+            // No day in the window claims this candidate — drop it silently.
+            continue;
+        };
+
+        // Project into the wire item via the SAME mapping `rank_today` uses.
+        let item = candidate_to_item(candidate, at, overdue);
+
+        // "My week": narrow to one member's items, exactly as Today does.
+        if !member_matches(&item, config) {
+            continue;
+        }
+
+        // Collapse an exact-duplicate placement (same kind/source/instant) —
+        // see the doc comment's note on repeated one-shot task candidates.
+        let bucket = &mut buckets[idx];
+        let already_placed = bucket.iter().any(|existing| {
+            existing.kind == item.kind
+                && existing.source_id == item.source_id
+                && existing.at == item.at
+        });
+        if !already_placed {
+            bucket.push(item);
+        }
+    }
+
+    // Order each day: all-day first, then events before tasks, then by
+    // salient time, then source id — a layout, not a ranking (no priority key).
+    for bucket in &mut buckets {
+        bucket.sort_by(|a, b| {
+            b.all_day
+                .cmp(&a.all_day)
+                .then_with(|| kind_rank(a.kind).cmp(&kind_rank(b.kind)))
+                .then(a.at.cmp(&b.at))
+                .then_with(|| a.source_id.cmp(&b.source_id))
+        });
+    }
+
+    WeekPlan {
+        start: week_start,
+        days: week_dates
+            .into_iter()
+            .zip(buckets)
+            .map(|(date, items)| WeekDay { date, items })
+            .collect(),
+    }
+}
+
+/// Ordering rank for the "events before tasks" layout rule — lower sorts first.
+///
+/// Only used by `plan_week`'s bucket sort; `rank_today` interleaves the two
+/// kinds purely by time instead, so this has no equivalent there.
+fn kind_rank(kind: SurfacedKind) -> u8 {
+    match kind {
+        // Events lead a day's timed items, ahead of any task.
+        SurfacedKind::Event => 0,
+        SurfacedKind::Task => 1,
+    }
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -805,5 +991,178 @@ mod tests {
         // Only the placeholder member's task survives.
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].title, "my task");
+    }
+
+    // ── Week planning ─────────────────────────────────────────────────────────
+    // Reuses the same fixed-day fixtures as the Today suite above: `today()`
+    // (2026-07-24) is a Friday, so it falls at index 4 (Monday = 0) of the
+    // week `week_start()` anchors — every timed fixture (`morning`,
+    // `afternoon`, `evening`, `yesterday`) lands inside this same window.
+
+    /// The Monday of the week `today()` falls in — `plan_week`'s fixed anchor.
+    fn week_start() -> Date {
+        // 2026-07-20 is a Monday; `today()` (2026-07-24, Friday) is 4 days in.
+        date!(2026 - 07 - 20)
+    }
+
+    /// Plan the fixed week against the fixed `now`, with default config.
+    fn plan(candidates: Vec<SurfaceCandidate>) -> WeekPlan {
+        // Every test funnels through this call so the window and now stay fixed.
+        plan_week(candidates, week_start(), now(), &SurfacingConfig::default())
+    }
+
+    /// Item counts per day, Monday first — a compact shape for asserting
+    /// "only this one day got anything" without listing all 7 buckets by hand.
+    fn day_counts(plan: &WeekPlan) -> Vec<usize> {
+        plan.days.iter().map(|d| d.items.len()).collect()
+    }
+
+    #[test]
+    fn produces_seven_monday_first_days() {
+        // An empty week is still a real 7-day shape, not an empty vec — the
+        // grid always has 7 columns even on a quiet week.
+        let plan = plan(vec![]);
+        assert_eq!(plan.start, week_start());
+        assert_eq!(plan.days.len(), 7);
+        // Each day is exactly one more than the last, starting at the Monday.
+        let expected: Vec<Date> = (0_i64..7)
+            .map(|offset| week_start() + Duration::days(offset))
+            .collect();
+        let actual: Vec<Date> = plan.days.iter().map(|d| d.date).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bucketing_places_an_event_on_its_own_day_only() {
+        // A Friday-morning event must land in the Friday bucket (index 4) and
+        // nowhere else in the week.
+        let e = event("dentist", sched(morning()), false);
+        let plan = plan(vec![e]);
+        assert_eq!(plan.days[4].date, today());
+        assert_eq!(day_counts(&plan), vec![0, 0, 0, 0, 1, 0, 0]);
+        assert_eq!(plan.days[4].items[0].title, "dentist");
+    }
+
+    #[test]
+    fn monday_start_boundary_keeps_the_edges_and_drops_the_neighbours() {
+        // One day either side of the window (prior Sunday, next Monday) makes
+        // no claim on this week; the window's own first and last day do.
+        let before = event(
+            "too early",
+            sched(datetime!(2026-07-19 10:00:00 UTC)),
+            false,
+        );
+        let after = event("too late", sched(datetime!(2026-07-27 10:00:00 UTC)), false);
+        let first_day = event(
+            "start of week",
+            sched(datetime!(2026-07-20 06:00:00 UTC)),
+            false,
+        );
+        let last_day = event(
+            "end of week",
+            sched(datetime!(2026-07-26 23:00:00 UTC)),
+            false,
+        );
+        let plan = plan(vec![before, after, first_day, last_day]);
+        assert_eq!(day_counts(&plan), vec![1, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(plan.days[0].items[0].title, "start of week");
+        assert_eq!(plan.days[6].items[0].title, "end of week");
+    }
+
+    #[test]
+    fn window_task_with_no_overlap_in_the_week_is_dropped() {
+        // A one-shot task due well outside the window makes no claim on any
+        // of its 7 days — same "no claim, no surfacing" silence as Today.
+        let far_future = task(
+            "someday",
+            Liveness::Live,
+            win(None, Some(datetime!(2026-08-15 09:00:00 UTC))),
+        );
+        let plan = plan(vec![far_future]);
+        assert_eq!(day_counts(&plan), vec![0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn overdue_task_places_once_on_its_due_day_not_every_day() {
+        // `yesterday()` (Thursday, index 3) is overdue relative to `now()`
+        // (Friday noon). `timing_on_day`'s overdue branch is deliberately
+        // day-independent for Today's "always sticky" behaviour — this proves
+        // `plan_week` still collapses it to the ONE day it is actually due,
+        // rather than placing it on all 7 days of the window.
+        let overdue = task(
+            "overdue thing",
+            Liveness::Live,
+            win(None, Some(yesterday())),
+        );
+        let plan = plan(vec![overdue]);
+        assert_eq!(day_counts(&plan), vec![0, 0, 0, 1, 0, 0, 0]);
+        assert!(plan.days[3].items[0].overdue);
+    }
+
+    #[test]
+    fn all_day_leads_ahead_of_timed_events_and_tasks() {
+        // All-day is the top sort key, ahead of both an earlier-clock-time
+        // event and a task, mirroring Today's "banner" rule.
+        let banner = event(
+            "king's day",
+            sched(datetime!(2026-07-24 00:00:00 UTC)),
+            true,
+        );
+        let timed = event("school run", sched(morning()), false);
+        let due_task = task("water plants", Liveness::Live, win(None, Some(evening())));
+        let plan = plan(vec![timed, due_task, banner]);
+        let items = &plan.days[4].items;
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].title, "king's day");
+    }
+
+    #[test]
+    fn events_lead_tasks_regardless_of_salient_time() {
+        // Week's ordering rule is "events before tasks" as a hard group, not a
+        // pure by-time interleave — unlike Today, which mixes the two kinds
+        // purely by time. An earlier-due task still sorts after a later event.
+        let early_task = task("early task", Liveness::Live, win(None, Some(morning())));
+        let later_event = event("later event", sched(evening()), false);
+        let plan = plan(vec![early_task, later_event]);
+        let items = &plan.days[4].items;
+        assert_eq!(
+            items.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(),
+            vec!["later event", "early task"]
+        );
+    }
+
+    #[test]
+    fn done_task_is_excluded_open_tasks_only() {
+        // The maintainer's ratified default: Week shows only open tasks.
+        let done = task("finished", Liveness::Settled, sched(morning()));
+        let plan = plan(vec![done]);
+        assert_eq!(day_counts(&plan), vec![0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn member_filter_narrows_the_week() {
+        // Same "my week" narrowing as Today's per-person filter.
+        let mine = task("mine", Liveness::Live, sched(morning()));
+        let mut theirs = task("theirs", Liveness::Live, sched(afternoon()));
+        theirs.current_assignee_id = Some(other_member());
+        let config = SurfacingConfig {
+            member_filter: Some(member()),
+        };
+        let plan = plan_week(vec![mine, theirs], week_start(), now(), &config);
+        let items = &plan.days[4].items;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "mine");
+    }
+
+    #[test]
+    fn duplicate_one_shot_task_candidates_collapse_to_one_placement() {
+        // Simulates the service concatenating 7 identical per-day builds of
+        // the same one-shot task's `Window` candidate (see `plan_week`'s doc
+        // comment) — without the dedupe guard this would place the task 7
+        // times over on its due day.
+        let original = task("water plants", Liveness::Live, win(None, Some(evening())));
+        let duplicate = original.clone();
+        let plan = plan(vec![original, duplicate]);
+        assert_eq!(day_counts(&plan), vec![0, 0, 0, 0, 1, 0, 0]);
     }
 }

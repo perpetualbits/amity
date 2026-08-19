@@ -1,30 +1,36 @@
-// api/surfacing.rs — HTTP handler for the surfacing (Today) query.
+// api/surfacing.rs — HTTP handlers for the surfacing (Today) and Week queries.
 //
-// Endpoint:
-//   GET /api/v1/surfacing/today?date=YYYY-MM-DD  — the ranked "what's on today"
+// Endpoints:
+//   GET /api/v1/surfacing/today?date=YYYY-MM-DD   — the ranked "what's on today"
+//   GET /api/v1/week?start=YYYY-MM-DD             — the 7-day Monday-start layout
 //
 // This is the service-layer half of the surfacing feature. The pure ranking
-// rule lives in `amity_core::surfacing`; this handler's job is to *assemble the
-// candidates* from storage, hand them to the rule, and serialise the result:
+// rule (`rank_today`) and the pure layout rule (`plan_week`) both live in
+// `amity_core::surfacing`; this file's job is to *assemble the candidates*
+// from storage, hand them to whichever rule applies, and serialise the result:
 //
-//   1. Resolve the target day (?date=…, else today in UTC).
+//   1. Resolve the target day (?date=…, else today in UTC) — or, for Week, the
+//      Monday of the target day's week (?start=…, else this week).
 //   2. Load tasks AND events. One-shot tasks become a Window candidate; recurring
 //      tasks a Scheduled candidate per instance; a one-shot NATIVE event a
 //      Scheduled candidate on its start date; every other event — native
 //      recurring, or any Ics event at all — one Scheduled candidate per
 //      materialised `event_instances` row, minus any instance with a Cancel
-//      override. (The pure rule drops resolved/undated tasks — we do not
-//      pre-filter.)
-//   3. Rank via `rank_today` and return a uniform, type-tagged item list plus
-//      the `has_surfaced` empty-state flag.
+//      override. (The pure rules drop resolved/undated tasks — we do not
+//      pre-filter.) Week calls the SAME per-day builders once for each of the
+//      7 days and concatenates the results — see `week`'s doc comment for why
+//      that is safe despite one-shot tasks not being day-scoped internally.
+//   3. Rank/lay out via `rank_today`/`plan_week` and return a uniform,
+//      type-tagged item list (Today) or 7 day-buckets of the same (Week), plus
+//      Today's `has_surfaced` empty-state flag.
 //
-// The response shape is `SurfacedKind`-tagged so the Today view renders a
+// The response shape is `SurfacedKind`-tagged so both views render a
 // mixed-type list. Task and Event both feed it now; Project/Thread are the
 // remaining seam. Overdue items carry a flag the frontend renders as plain
 // information — never a lateness count (brief §3, §11).
 //
 // Error handling matches api/task.rs:
-//   HTTP 400 Bad Request     — the `date` query parameter is not YYYY-MM-DD.
+//   HTTP 400 Bad Request     — the `date`/`start` query parameter is not YYYY-MM-DD.
 //   HTTP 500 Internal Error  — an unexpected storage failure (logged, not leaked).
 
 // axum's JSON response wrapper.
@@ -44,9 +50,10 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use time::{Date, Duration, OffsetDateTime};
 
-// The pure surfacing rule and its types.
+// The pure surfacing rule and its types, plus Week's pure layout rule.
 use amity_core::surfacing::{
-    Liveness, SurfaceCandidate, SurfacedItem, SurfacedKind, SurfacingConfig, Timing, rank_today,
+    Liveness, SurfaceCandidate, SurfacedItem, SurfacedKind, SurfacingConfig, Timing, plan_week,
+    rank_today,
 };
 // `Task` is what we assemble candidates from; `TaskStatus` maps onto `Liveness`.
 use amity_core::task::{Task, TaskStatus};
@@ -136,6 +143,40 @@ pub struct TodayResponse {
     pub items: Vec<SurfacedItemResponse>,
 }
 
+/// Query parameters for `GET /api/v1/week`.
+///
+/// `start` is optional and need not itself be a Monday — any date inside the
+/// target week works, mirroring how `?date=` on Today accepts any single day.
+/// Absent means "this week", computed from the server's UTC clock.
+#[derive(Debug, Deserialize)]
+pub struct WeekQuery {
+    /// Any date inside the target week, as `YYYY-MM-DD`; absent → this week (UTC).
+    pub start: Option<String>,
+}
+
+/// JSON shape of one day's bucket in a `WeekResponse`.
+#[derive(Debug, Serialize)]
+pub struct WeekDayResponse {
+    /// The calendar date this bucket is for (`YYYY-MM-DD`).
+    pub date: String,
+    /// The items placed on this day, already ordered by `plan_week`'s layout
+    /// rule (all-day first, then events before tasks, then by salient time).
+    pub items: Vec<SurfacedItemResponse>,
+}
+
+/// JSON envelope returned by `GET /api/v1/week`.
+///
+/// Always exactly 7 `days`, Monday-first — Week has no empty-state flag the
+/// way Today does, because an empty grid is still a complete, meaningful
+/// answer (a quiet week), not a "nothing to show" case needing a signal.
+#[derive(Debug, Serialize)]
+pub struct WeekResponse {
+    /// The Monday this week starts on (`YYYY-MM-DD`), echoed for the client.
+    pub start: String,
+    /// Exactly 7 day buckets, `start` through `start + 6 days`, in order.
+    pub days: Vec<WeekDayResponse>,
+}
+
 // ─── Handler ────────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/surfacing/today` — the ranked "what's on today" query.
@@ -207,6 +248,90 @@ pub async fn today(
         items,
     };
     // 200 OK with the envelope — surfacing has no "not found" case.
+    Json(body).into_response()
+}
+
+/// `GET /api/v1/week` — the Monday-start 7-day layout query.
+///
+/// Resolves `?start=` (any date inside the target week; absent → this week)
+/// to that week's Monday, then builds the SAME per-day candidate set `today`
+/// does — once for each of the 7 days — before handing the concatenated whole
+/// to `plan_week`. This is deliberately not a 7x call to `today`'s handler:
+/// `plan_week` needs the *union* of every day's candidates up front so it can
+/// place recurring events/tasks on the day their own instance actually falls
+/// on, in one pass, with one consistent `now`.
+///
+/// One-shot tasks are NOT filtered by day inside `build_task_candidates`
+/// (Today only ever calls it once, so it does not need to be), so calling it
+/// once per day yields 7 identical copies of the same one-shot task's
+/// candidate. This is safe: `plan_week` collapses duplicate placements of the
+/// same instance (same kind/source id/salient time) — see its doc comment.
+///
+/// Returns HTTP 400 if `start` is present but not `YYYY-MM-DD`.
+/// Returns HTTP 500 on an unexpected task-storage failure.
+pub async fn week(
+    State(state): State<AppState>,
+    Query(params): Query<WeekQuery>,
+) -> impl IntoResponse {
+    // Capture `now` once — shared by every day's overdue comparison.
+    let now = OffsetDateTime::now_utc();
+
+    // Resolve any date inside the target week: an explicit `?start=` wins;
+    // otherwise today (UTC). Errors mirror `today`'s `?date=` handling.
+    let anchor_date = match params.start.as_deref() {
+        Some(s) => match parse_date(s) {
+            Ok(d) => d,
+            Err(msg) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))).into_response();
+            }
+        },
+        None => now.date(),
+    };
+
+    // The Monday of `anchor_date`'s week: step back by its weekday offset
+    // from Monday (0 for Monday itself, up to 6 for Sunday).
+    let week_start =
+        anchor_date - Duration::days(i64::from(anchor_date.weekday().number_days_from_monday()));
+
+    // Load every task once; the per-day builder below is called once per day
+    // but does not re-read the task list each time. As on Today, a task-list
+    // read failure is fatal — an event read failure degrades gracefully.
+    let tasks = match list_tasks(&state.db, &TaskFilter::default()).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list tasks for week");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Build and concatenate all 7 days' candidates via the SAME per-day
+    // builders Today uses — this carries overrides and external-event
+    // instances automatically, with no separate Week-specific query path.
+    let mut candidates: Vec<SurfaceCandidate> = Vec::new();
+    for offset in 0_i64..7 {
+        let day = week_start + Duration::days(offset);
+        candidates.extend(build_task_candidates(&state, &tasks, day).await);
+        candidates.extend(build_event_candidates(&state, day).await);
+    }
+
+    // Lay out the week. No member filter yet, matching Today.
+    let plan = plan_week(candidates, week_start, now, &SurfacingConfig::default());
+
+    // Project each day's ranked items into the wire shape.
+    let days = plan
+        .days
+        .into_iter()
+        .map(|day| WeekDayResponse {
+            date: format_date(day.date),
+            items: day.items.iter().map(surfaced_item_to_response).collect(),
+        })
+        .collect();
+    let body = WeekResponse {
+        // Echo the resolved Monday so the client can label the grid.
+        start: format_date(plan.start),
+        days,
+    };
+    // 200 OK with the envelope — Week, like Today, has no "not found" case.
     Json(body).into_response()
 }
 
