@@ -90,6 +90,9 @@ pub fn build_app(db: SqlitePool) -> Router {
         // Surfacing — the one ranked "what's on today" query feeding the Today
         // view, drawing tasks and events into a single mixed-type list.
         .route("/api/v1/surfacing/today", get(api::surfacing::today))
+        // Week — the Monday-start 7-day layout query, mirroring Today's shape
+        // and error handling one level up (a week of days, not a day of items).
+        .route("/api/v1/week", get(api::surfacing::week))
         // Calendar endpoints — subscribed read-only external ICS feeds (Task 5).
         // Create and list share a path, split by method, same as events above.
         // Subscribe: builds + validates a Calendar, inserts it with fresh

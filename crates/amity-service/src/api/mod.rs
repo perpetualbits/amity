@@ -19,6 +19,7 @@
 //   POST  /api/v1/tasks/{id}/assignee    — change current_assignee_id
 //   GET   /api/v1/tasks/{id}/history     — list completion log entries
 //   GET   /api/v1/surfacing/today        — ranked "what's on today" query
+//   GET   /api/v1/week                   — Monday-start 7-day layout query
 //   POST  /api/v1/calendars              — subscribe to a new ICS feed
 //   GET   /api/v1/calendars              — list subscribed calendars
 //   GET   /api/v1/calendars/{id}         — fetch one calendar (+ sync state)

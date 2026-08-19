@@ -23,6 +23,8 @@ config.toml
 apps/hub-tauri/dist/
 apps/hub-tauri/node_modules/
 apps/hub-tauri/.tauri/
+apps/hub-tauri/src-tauri/gen/
+apps/hub-tauri/src-tauri/target/
 
 # Node package manager lockfiles — only pnpm-lock.yaml is canonical
 package-lock.json

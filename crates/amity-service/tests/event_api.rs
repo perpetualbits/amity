@@ -113,6 +113,89 @@ async fn cancel_override_removes_the_event_from_today() {
 }
 
 #[tokio::test]
+async fn reschedule_override_moves_the_surfaced_time_and_the_original_slot_does_not_surface() {
+    let app = build_test_app().await;
+
+    // Create an event at 07:00 on the target day.
+    let create = post_json(
+        app.clone(),
+        "/api/v1/events",
+        json!({ "title": "bin day", "start_at": "2099-04-27T07:00:00+00:00" }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let created = body_json(create).await;
+    let id = created["id"].as_str().expect("event id");
+
+    // Reschedule the instance to 09:00 the same day.
+    let reschedule = post_json(
+        app.clone(),
+        &format!("/api/v1/events/{id}/override"),
+        json!({
+            "instance_date": "2099-04-27",
+            "action": "reschedule",
+            "payload": "2099-04-27T09:00:00+00:00"
+        }),
+    )
+    .await;
+    assert_eq!(reschedule.status(), StatusCode::CREATED);
+
+    // Exactly one item surfaces, at the NEW time, flagged rescheduled — the
+    // original 07:00 slot does not also appear.
+    let resp = get(app, "/api/v1/surfacing/today?date=2099-04-27").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["has_surfaced"], true);
+    let items = body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1, "only the rescheduled slot should surface");
+    assert_eq!(items[0]["title"], "bin day");
+    assert_eq!(items[0]["at"], "2099-04-27T09:00:00Z");
+    assert_eq!(items[0]["rescheduled"], true);
+}
+
+#[tokio::test]
+async fn annotate_override_attaches_a_note_and_leaves_timing_unchanged() {
+    let app = build_test_app().await;
+
+    // Create an event on the target day.
+    let create = post_json(
+        app.clone(),
+        "/api/v1/events",
+        json!({ "title": "school trip", "start_at": "2099-04-27T08:00:00+00:00" }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let created = body_json(create).await;
+    let id = created["id"].as_str().expect("event id");
+
+    // Annotate the instance with a household note.
+    let annotate = post_json(
+        app.clone(),
+        &format!("/api/v1/events/{id}/override"),
+        json!({
+            "instance_date": "2099-04-27",
+            "action": "annotate",
+            "payload": "bring wellies"
+        }),
+    )
+    .await;
+    assert_eq!(annotate.status(), StatusCode::CREATED);
+
+    // The instance surfaces at its original time, carrying the annotation.
+    let resp = get(app, "/api/v1/surfacing/today?date=2099-04-27").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let items = body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], "school trip");
+    // Timing is unchanged — still the original 08:00 start.
+    assert_eq!(items[0]["at"], "2099-04-27T08:00:00Z");
+    assert_eq!(items[0]["annotation"], "bring wellies");
+    // Annotate does not move the instance.
+    assert_eq!(items[0]["rescheduled"], false);
+}
+
+#[tokio::test]
 async fn all_day_event_leads_the_day_ahead_of_a_task() {
     let app = build_test_app().await;
 

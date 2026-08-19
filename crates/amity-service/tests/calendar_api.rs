@@ -355,3 +355,79 @@ async fn recurring_external_event_surfaces_on_a_later_occurrence_and_sweeps_stal
     assert_eq!(still_first_items.len(), 1);
     assert_eq!(still_first_items[0]["title"], "weekly recurring");
 }
+
+#[tokio::test]
+async fn override_on_a_recurring_external_event_reflects_in_surfacing() {
+    // Locks the Task 5 external-instance seam: a Reschedule override on one
+    // occurrence of a recurring EXTERNAL (ICS) event must move that instance's
+    // surfaced time, exactly as it does for a native event. External events
+    // route through the `event_instances` path (Event.recurrence is always
+    // `None` for Ics events — see the regression test above), so this proves
+    // the override lookup keys correctly on that path too, not just the
+    // native one-shot/recurring branches.
+    let db = open_database("sqlite::memory:")
+        .await
+        .expect("in-memory database should open");
+    let app = build_app(db.clone());
+
+    // Subscribe a calendar and ingest the weekly recurring fixture.
+    let create = post_json(
+        app.clone(),
+        "/api/v1/calendars",
+        json!({ "name": "club", "url": "https://example.test/club.ics", "category": "club" }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+
+    let now = time::macros::datetime!(2099-04-27 12:00:00 UTC);
+    let report = run_once(&db, now, |_url| {
+        ready(Ok::<_, FetchError>(RECURRING_FIXTURE.to_owned()))
+    })
+    .await
+    .expect("sync run succeeds");
+    assert_eq!(report.calendars_synced, 1);
+    assert_eq!(report.events_upserted, 1);
+
+    // Discover the ingested event's id via the real list endpoint (the sync
+    // job itself returns only a summary count, not the event).
+    let list = get(app.clone(), "/api/v1/events").await;
+    assert_eq!(list.status(), StatusCode::OK);
+    let events = body_json(list).await;
+    let events = events.as_array().expect("events array");
+    let event = events
+        .iter()
+        .find(|e| e["title"] == "weekly recurring")
+        .expect("ingested event must be listed");
+    let id = event["id"].as_str().expect("event id");
+
+    // Annotate the 3rd occurrence (2099-05-15) — a later week, not the first
+    // materialised instance, so this also proves the override applies to the
+    // instance the caller targets, not just whichever one syncs first.
+    let annotate = post_json(
+        app.clone(),
+        &format!("/api/v1/events/{id}/override"),
+        json!({
+            "instance_date": "2099-05-15",
+            "action": "annotate",
+            "payload": "bring the away kit"
+        }),
+    )
+    .await;
+    assert_eq!(annotate.status(), StatusCode::CREATED);
+
+    // The annotated occurrence surfaces with the note, timing unchanged.
+    let annotated_day = get(app.clone(), "/api/v1/surfacing/today?date=2099-05-15").await;
+    let annotated_body = body_json(annotated_day).await;
+    let annotated_items = annotated_body["items"].as_array().expect("items array");
+    assert_eq!(annotated_items.len(), 1);
+    assert_eq!(annotated_items[0]["title"], "weekly recurring");
+    assert_eq!(annotated_items[0]["annotation"], "bring the away kit");
+    assert_eq!(annotated_items[0]["at"], "2099-05-15T09:00:00Z");
+
+    // A separate occurrence (1st week) is untouched by the override.
+    let other_week = get(app, "/api/v1/surfacing/today?date=2099-05-01").await;
+    let other_body = body_json(other_week).await;
+    let other_items = other_body["items"].as_array().expect("items array");
+    assert_eq!(other_items.len(), 1);
+    assert!(other_items[0].get("annotation").is_none());
+}

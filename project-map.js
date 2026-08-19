@@ -99,6 +99,7 @@ window.PROJECT_MAP = {
         { label: "Capture / Today switch", status: "done", desc: "A two-item segmented control; no router." },
         { label: "Today view", status: "done", desc: "Renders /surfacing/today as a mixed task+event list with a per-item kind marker (○ task / ◆ event); events show \"all day\" and carry no actions. Mark-done, reassign, and a calm empty state (type-checked, not yet run live)." },
         { label: "Task capture form", status: "done", desc: "Title, notes, due, tags, and a recurrence preset that builds the RRULE (not yet run live)." },
+        { label: "Week view (UI)", status: "planned", desc: "BLOCKED, not built: the hub's native (Tauri) side does not compile on this machine — tauri-macros 2.6.3 (latest) trips E0255 on every rustc 1.88–1.95. Week backend + /week are ready; the SolidJS Week grid + live bring-up wait on an upstream tauri fix (or a full tauri-* family downgrade)." },
         { label: "Hub-at-rest (clock / weather / LED)", status: "planned", desc: "The calm screensaver baseline from brief §11.5–11.6." },
       ],
       deps: ["api"],
@@ -223,7 +224,7 @@ window.PROJECT_MAP = {
         { label: "Empty-state result (has_surfaced)", status: "done", desc: "\"nothing today\" is a real result, not an error — brief §3." },
         { label: "Cross-entity ranking", status: "active", desc: "Task and Event now rank together through the kind-agnostic rule; Project and Thread still to come." },
         { label: "Today view", status: "done", desc: "The hub renders the mixed stream with a per-item kind marker (type-checked; live run pending WebKit)." },
-        { label: "Week view", status: "planned", desc: "A second window over the same layer — deferred from Task 3." },
+        { label: "Week view", status: "active", desc: "Backend shipped (Task 6): pure plan_week planner (Mon-start 7-day buckets, overrides applied, open tasks only) + GET /week endpoint. The hub UI is blocked — see the hub node." },
       ],
       deps: ["task", "event", "api"],
     },
@@ -404,7 +405,7 @@ window.PROJECT_MAP = {
         { label: "Storage (migration 0003)", status: "done", desc: "events + event_instances + event_overrides; source flattened onto the row." },
         { label: "Event API", status: "done", desc: "POST/GET /events, GET /events/{id}, POST /events/{id}/override — integration-tested." },
         { label: "Surfacing + Cancel override", status: "done", desc: "Events surface on Today via the kind-agnostic rule; a Cancel override removes the day's instance." },
-        { label: "Reschedule / Annotate applied", status: "seam", desc: "Overrides are stored but only Cancel affects surfacing yet — the overlay is wired, not fully applied." },
+        { label: "Reschedule / Annotate applied", status: "done", desc: "All three override actions now affect surfacing (Task 6 slice 1): Cancel hides the instance, Reschedule moves its time, Annotate attaches a note — on the shared instance path, external events included." },
         { label: "ICS ingestion & external feeds", status: "done", desc: "Read-only school/club/afvalkalender/holiday/personal calendars fetched, parsed, and synced every ~6h under ADR-0004's egress guards — the aggregator half, Task 5." },
       ],
       deps: ["recurrence"],
@@ -647,10 +648,12 @@ window.PROJECT_MAP = {
   // linear plan: the maintainer built vertically — foundation plus the Task
   // backend and its recurrence engine — rather than strictly phase by phase, so
   // phases 1, 3 and 4 are all partly done at once while 2, 5 and 6 are untouched.
-  // No "next" entry is listed here: Task 5 (ICS ingestion) shipped as of this
-  // sync and no successor task is specified yet. Add a new { kind: "next", ... }
-  // entry once one is.
+  // Task 6 shipped its backend (Reschedule/Annotate overrides + the Week-view
+  // planner and /week endpoint). Its hub half — the live prototype and the Week
+  // UI — is blocked by an upstream tauri-macros/E0255 build failure, so the
+  // "next" entry names that follow-up rather than Task 7.
   roadmap: [
+    { id: "t6b", kind: "next", label: "Task 6 follow-up · hub live + Week UI (blocked: tauri-macros E0255)", status: "planned" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
     { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },
