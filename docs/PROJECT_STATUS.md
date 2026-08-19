@@ -1,6 +1,6 @@
 # Amity — Project Status Report
 
-*Living handoff document. Last updated 2026-08-19 (Task 6 backend shipped; hub half blocked — see below).*
+*Living handoff document. Last updated 2026-08-20 (Task 6 backend merged; hub half blocked; **P2 is next**).*
 *Update this file whenever a task lands (it is the source of truth Claude.ai reads to prepare the next prompt).*
 
 ## Working model (henceforth)
@@ -88,8 +88,8 @@ the egress guards were then added (mutation-verified to bite).
 
 ## Repository health (as of this update)
 
-- Task 6 backend on branch **`task-6-hub-live-week`** (Slices 1 + 2a + the hub
-  `[workspace]` fix), merging to `main` after final review.
+- **`main` = `b3ffe5c`, in sync with `origin/main`.** Task 6 backend merged
+  (Slices 1 + 2a + the hub `[workspace]` fix). Clean tree.
 - **197 tests passing**; **`cargo fmt` clean; `clippy -W clippy::pedantic` 0
   warnings; comment-density gate 0 failures.** (Backend only — the hub native
   build is a separate, blocked concern; see the blocker.)
@@ -167,26 +167,23 @@ and build the Week **UI** against the ready `/api/v1/week` endpoint.
 - `SyncReport.calendars_synced` counts **attempts, not successes**; no direct
   test for `delete_calendar`'s instance cascade (code verified by inspection).
 
-## Open decision: what's next?
+## Next task: P2 · Meals, Lists & Pantry (decided 2026-08-20)
 
-The roadmap "next" marker now points at the **Task 6 follow-up — hub live + Week
-UI**, which is **blocked upstream** (see the hub blocker). Claude.ai decides
-whether to:
+The maintainer chose **P2 — Meals, Lists & Pantry** (the meal→groceries pipeline)
+as the next task: pure backend, so it entirely sidesteps the blocked hub. The
+roadmap "next" marker points here. The hub live-prototype + Week UI follow-up
+stays deferred (blocked upstream) until Tauri is fixed.
 
-1. **Wait out / fix the hub blocker**, then finish the visible prototype (Slice 0
-   live bring-up + Slice 2b Week UI against the ready `/week` endpoint). This is
-   what "next" currently names, but it depends on an upstream `tauri-macros` fix
-   or a full `tauri-*` family downgrade.
-2. **P2 · Meals, Lists & Pantry** — the skipped early phase; central to the MVP
-   "definition of done"; the largest unbuilt chunk. A good backend-only choice
-   that sidesteps the hub blocker entirely.
-3. **P5 · Notifications + hub-at-rest** — later in the sketch; substantial.
+**P2 scope, from the brief** (§18.1 Weeks 3–4; for Claude.ai to turn into a task
+brief): Meals + Lists + PantryItem entities, and the meal-to-groceries pipeline
+end-to-end *without recipes* (per §18.1). MVP definition-of-done touchpoints
+(§18.3): "Menu planned, groceries generated and checked off on mobile." Mirror the
+established entity pattern (builder + clock injection in `amity-core`, a
+migration + repository in `amity-storage`, an axum API module in `amity-service`,
+subagent-driven with TDD and the gates below).
 
-Recommendation for Claude.ai: if the hub blocker isn't quickly resolvable
-upstream, pick **P2** next (pure backend, unblocked, high MVP value) and keep the
-hub follow-up marked as blocked until Tauri is fixed.
-
-Once Claude.ai picks, the Claude Code prompt should: name the task + acceptance
-criteria, point at the relevant existing patterns to mirror, restate the
-guardrails above, and (for a multi-slice feature) ask for a brief plan first.
-Claude Code then updates the `project-map.js` "next" marker as part of that work.
+**Awaiting the P2 task brief from Claude.ai** (drop it in `docs/prompts/`, same as
+the Task 6 brief). A good Claude Code prompt: names the task + acceptance
+criteria, points at the entity patterns to mirror (`task.rs`/`event.rs` +
+their storage/API), restates the guardrails above, and asks for a brief plan
+first. Claude Code sets the `project-map.js` "next" marker as part of the work.

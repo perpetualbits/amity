@@ -650,10 +650,11 @@ window.PROJECT_MAP = {
   // phases 1, 3 and 4 are all partly done at once while 2, 5 and 6 are untouched.
   // Task 6 shipped its backend (Reschedule/Annotate overrides + the Week-view
   // planner and /week endpoint). Its hub half — the live prototype and the Week
-  // UI — is blocked by an upstream tauri-macros/E0255 build failure, so the
-  // "next" entry names that follow-up rather than Task 7.
+  // UI — is blocked by an upstream tauri-macros/E0255 build failure (see the hub
+  // node), so it is deferred. The actively-scheduled next task is P2 (Meals,
+  // Lists & Pantry) — pure backend, which sidesteps the hub blocker.
   roadmap: [
-    { id: "t6b", kind: "next", label: "Task 6 follow-up · hub live + Week UI (blocked: tauri-macros E0255)", status: "planned" },
+    { id: "next-p2", kind: "next", label: "P2 · Meals, Lists & Pantry (meal→groceries)", status: "planned" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
     { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },
