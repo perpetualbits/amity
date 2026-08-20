@@ -67,7 +67,7 @@ struct CaptureRequest {
 /// toast notifications, no animated error states — consistent with the calm
 /// aesthetic.
 #[tauri::command]
-pub async fn capture_inbox_item(raw_text: String) -> Result<InboxItem, String> {
+async fn capture_inbox_item(raw_text: String) -> Result<InboxItem, String> {
     let client = reqwest::Client::new();
 
     let body = CaptureRequest {
@@ -103,7 +103,7 @@ pub async fn capture_inbox_item(raw_text: String) -> Result<InboxItem, String> {
 ///
 /// Returns a string error if the HTTP request fails.
 #[tauri::command]
-pub async fn list_recent_inbox(limit: u32) -> Result<Vec<InboxItem>, String> {
+async fn list_recent_inbox(limit: u32) -> Result<Vec<InboxItem>, String> {
     let client = reqwest::Client::new();
 
     // Cap at 100 to match the service's own maximum, even though the service
@@ -265,7 +265,7 @@ async fn post_ok<B: Serialize>(url: String, body: &B) -> Result<(), String> {
 ///
 /// Returns a message the frontend can display if the service is unreachable.
 #[tauri::command]
-pub async fn surfacing_today(date: Option<String>) -> Result<TodayResponse, String> {
+async fn surfacing_today(date: Option<String>) -> Result<TodayResponse, String> {
     // Build the URL, appending the optional date query parameter.
     let mut url = format!("{SERVICE_BASE_URL}/api/v1/surfacing/today");
     if let Some(date) = date {
@@ -285,7 +285,7 @@ pub async fn surfacing_today(date: Option<String>) -> Result<TodayResponse, Stri
 ///
 /// Returns the service's 422 message for invalid input (e.g. an empty title).
 #[tauri::command]
-pub async fn create_task(
+async fn create_task(
     title: String,
     notes: Option<String>,
     due_by: Option<String>,
@@ -315,7 +315,7 @@ pub async fn create_task(
 ///
 /// Returns a message on transport failure or a non-2xx status.
 #[tauri::command]
-pub async fn complete_task(id: String, instance_date: String) -> Result<(), String> {
+async fn complete_task(id: String, instance_date: String) -> Result<(), String> {
     // The completion body only needs the instance date.
     let body = CompleteBody { instance_date };
     // POST to the task's complete sub-resource.
@@ -335,7 +335,7 @@ pub async fn complete_task(id: String, instance_date: String) -> Result<(), Stri
 ///
 /// Returns a message on transport failure or a non-2xx status.
 #[tauri::command]
-pub async fn change_assignee(id: String, member_id: Option<String>) -> Result<(), String> {
+async fn change_assignee(id: String, member_id: Option<String>) -> Result<(), String> {
     // The body carries the new assignee id (or null to clear it).
     let body = AssigneeBody { member_id };
     // POST to the task's assignee sub-resource.
