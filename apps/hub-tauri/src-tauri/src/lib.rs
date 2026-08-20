@@ -411,6 +411,19 @@ pub fn run() {
             complete_task,
             change_assignee,
         ])
+        // Kiosk mode: when AMITY_KIOSK=1 (set by scripts/run-hub.sh), start the
+        // window fullscreen for the wall-mounted hub. Default (unset/other) is a
+        // normal window. A missing window or a set-fullscreen failure is ignored
+        // — kiosk is a display preference, never a reason to fail startup.
+        .setup(|app| {
+            use tauri::Manager;
+            if std::env::var("AMITY_KIOSK").is_ok_and(|v| v == "1") {
+                for (_label, window) in app.webview_windows() {
+                    let _ = window.set_fullscreen(true);
+                }
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
