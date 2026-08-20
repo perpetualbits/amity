@@ -7,6 +7,7 @@
 //   capture_inbox_item  — POST /api/v1/inbox, returns the created item as JSON.
 //   list_recent_inbox   — GET /api/v1/inbox/recent?limit=N, returns array of items.
 //   surfacing_today     — GET /api/v1/surfacing/today?date=…, the Today view.
+//   week                — GET /api/v1/week?start=…, the Week view.
 //   create_task         — POST /api/v1/tasks, from the capture form.
 //   complete_task       — POST /api/v1/tasks/{id}/complete, mark an instance done.
 //   change_assignee     — POST /api/v1/tasks/{id}/assignee, one-tap reassignment.
@@ -155,6 +156,10 @@ pub struct SurfacedItem {
     pub priority: Option<u8>,
     /// UUID of the member shown as responsible; absent when unset.
     pub current_assignee_id: Option<String>,
+    /// A household note from an `Annotate` override; absent when there is none.
+    pub annotation: Option<String>,
+    /// True when a `Reschedule` override moved this instance to a new time.
+    pub rescheduled: bool,
 }
 
 /// The Today response envelope, mirroring `TodayResponse` in amity-service.
@@ -166,6 +171,28 @@ pub struct TodayResponse {
     pub has_surfaced: bool,
     /// The surfaced items, already ordered by the service.
     pub items: Vec<SurfacedItem>,
+}
+
+/// One day's bucket in a `WeekResponse`, mirroring `WeekDayResponse` in
+/// amity-service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeekDay {
+    /// The calendar date this bucket is for (`YYYY-MM-DD`).
+    pub date: String,
+    /// The items placed on this day, already ordered by the service's layout
+    /// rule (all-day first, then events before tasks, then by salient time).
+    pub items: Vec<SurfacedItem>,
+}
+
+/// The Week response envelope, mirroring `WeekResponse` in amity-service.
+///
+/// Always exactly 7 `days`, Monday-first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeekResponse {
+    /// The Monday this week starts on (`YYYY-MM-DD`).
+    pub start: String,
+    /// Exactly 7 day buckets, `start` through `start + 6 days`, in order.
+    pub days: Vec<WeekDay>,
 }
 
 /// Request body for creating a task; unset fields are omitted from the JSON.
@@ -275,6 +302,26 @@ async fn surfacing_today(date: Option<String>) -> Result<TodayResponse, String> 
     get_json(url).await
 }
 
+/// Fetch the Week view (`GET /api/v1/week`), optionally anchored to a date.
+///
+/// Called on mount of the Week view and on prev/next navigation. `start` is
+/// any date inside the target week (`YYYY-MM-DD`); when absent the service
+/// resolves "this week" from its own current date.
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable.
+#[tauri::command]
+async fn week(start: Option<String>) -> Result<WeekResponse, String> {
+    // Build the URL, appending the optional start query parameter.
+    let mut url = format!("{SERVICE_BASE_URL}/api/v1/week");
+    if let Some(start) = start {
+        url = format!("{url}?start={start}");
+    }
+    // Delegate to the shared GET helper.
+    get_json(url).await
+}
+
 /// Create a task (`POST /api/v1/tasks`) from the capture form.
 ///
 /// The recurrence pair (rrule + timezone) is either both present or both absent;
@@ -359,6 +406,7 @@ pub fn run() {
             capture_inbox_item,
             list_recent_inbox,
             surfacing_today,
+            week,
             create_task,
             complete_task,
             change_assignee,
