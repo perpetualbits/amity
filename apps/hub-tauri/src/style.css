@@ -391,6 +391,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  /* Break out of the .hub 720px reading column: the 7-day grid needs the full
+   * window width, otherwise each day is squeezed to ~100px. This full-bleed
+   * spans the viewport and re-centres inside the narrower centred parent, then
+   * restores the hub's own horizontal padding. Today/Capture keep the 720px
+   * column (readability); only Week goes wide. */
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  padding-inline: 1.5rem;
+  box-sizing: border-box;
 }
 
 .week-nav {
@@ -436,8 +445,10 @@ body {
   border: 1px solid #e0dfd9;
 }
 
-/* Stacked (portrait) layout: one column, days in order top to bottom. */
-@media (max-width: 720px) {
+/* Stacked (portrait) layout: one column, days top to bottom. Switches below
+ * ~900px, where seven columns would each fall under a comfortable/legible
+ * width — a narrow window reads as portrait intent regardless of device. */
+@media (max-width: 900px) {
   .week-grid {
     grid-template-columns: 1fr;
   }
