@@ -20,7 +20,7 @@
  */
 
 import { createSignal, onMount, For, Show } from "solid-js";
-import { week, formatWhen, type SurfacedItem, type WeekResponse } from "./api";
+import { week, type SurfacedItem, type WeekResponse } from "./api";
 
 /** Items shown per day before the "and N more" affordance takes over. Fixed
  * rather than measured — the brief asks not to shrink text to fit, and a
@@ -84,8 +84,12 @@ export default function Week() {
   /** True for a task — used for the kind marker, matching Today's convention. */
   const isTask = (item: SurfacedItem) => item.kind === "task";
 
-  /** The time label for an item: all-day reads "all day" instead of 00:00. */
-  const whenLabel = (item: SurfacedItem) => (item.all_day ? "all day" : formatWhen(item.at));
+  /** The time label for an item: all-day reads "all day"; a timed item always
+   * shows its clock time (24h). Week must NOT reuse api's `formatWhen`, which
+   * collapses non-today items to a date — every column here is a different day,
+   * so the clock time is exactly what the reader needs, and the date already
+   * lives in the column header. */
+  const whenLabel = (item: SurfacedItem) => (item.all_day ? "all day" : formatTime(item.at));
 
   return (
     <section class="week-section" aria-label="Week">
@@ -238,6 +242,17 @@ function todayISODate(): string {
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+/** Clock time (24h, e.g. "09:00") for an RFC 3339 instant, shown in home/local
+ * time — always, with no same-day branch (that is what `formatWhen` gets wrong
+ * for the Week grid). Per the Dutch 24-hour convention (brief §16). */
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 /** Short weekday name for a `YYYY-MM-DD` date, e.g. "Mon". Rendered in UTC so

@@ -48,6 +48,10 @@
 html,
 body {
   height: 100%;
+  /* The Week view uses a 100vw full-bleed to escape the reading column; guard
+   * against a hair of horizontal scroll if a scrollbar ever narrows the
+   * viewport. Safe here — the hub is a fixed-size webview. */
+  overflow-x: hidden;
 }
 
 body {

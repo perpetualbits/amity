@@ -20,7 +20,9 @@ FRI=$(date -d "$MON +4 day" +%Y-%m-%d)
 TODAY=$(date +%Y-%m-%d)
 
 # POST JSON to an endpoint; extract the "id" field from a JSON response.
-post() { curl -sS -X POST "$BASE/$1" -H 'content-type: application/json' -d "$2"; }
+# `--fail` makes an HTTP 4xx/5xx a non-zero exit, so (with `set -e`) a rejected
+# payload aborts loudly instead of the script reporting "done" with fewer items.
+post() { curl -fsS -X POST "$BASE/$1" -H 'content-type: application/json' -d "$2"; }
 idof() { python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])'; }
 
 echo "seeding demo data for the week of $MON ..."
