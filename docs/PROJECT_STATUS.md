@@ -1,6 +1,6 @@
 # Amity — Project Status Report
 
-*Living handoff document. Last updated 2026-08-20 (Task 6 backend merged; hub half blocked; **P2 is next**).*
+*Living handoff document. Last updated 2026-08-20 (Tasks 6 + 6b done; **hub runs live**; next: P2 vs Task 7 — see end).*
 *Update this file whenever a task lands (it is the source of truth Claude.ai reads to prepare the next prompt).*
 
 ## Working model (henceforth)
@@ -56,7 +56,8 @@ deferred task fields · `0004` external calendar ingestion.
 | **3** | **Surfacing** + **Today** view (`rank_today`, kind-agnostic ranking) | done |
 | **4** | **Event** entity + calendar surfacing on Today | done |
 | **5** | **ICS ingestion & external calendars** (read-only aggregation) | done |
-| **6** | Event **overrides** in surfacing + **Week view backend** | **backend done; hub UI blocked** |
+| **6** | Event **overrides** in surfacing + **Week view backend** | done |
+| **6b** | Unblock the hub, run it live, ship the **Week UI** | done — **hub runs live** |
 
 **Task 6 detail** (most recent): **Slice 1** — `Reschedule` and `Annotate`
 overrides now apply in surfacing (only `Cancel` did before), on the shared
@@ -68,9 +69,12 @@ and shared with `rank_today`. Both review-clean. **Chore-rotation check (Slice 3
 confirmed there is **no automatic rotation/assignment algorithm** — chores are
 recurrence + an *optional manual* assignee (instances inherit the parent's, per-
 instance overridable); the code explicitly disavows auto-fairness ("planner, not
-mediator"). **Blocked (Slices 0 + 2b):** the hub's native side won't compile —
-see the blocker below — so the live prototype and the Week **UI** are deferred to
-a follow-up. The Week **backend** is ready and tested behind `/api/v1/week`.
+mediator").
+
+**Task 6b** then **unblocked the hub and shipped the Week UI** — the hub now
+builds and runs live (`scripts/run-hub.sh`), with the Week grid visually
+verified by the maintainer. See "How the hub was unblocked" below (my earlier
+"upstream tauri-macros" diagnosis was wrong — the real cause was local).
 
 **Task 5 detail** (most recent): a `Calendar` entity; pure iCalendar
 `parse_feed`/`expand_external` (via `ical` + `rrule` crates, DST-correct);
@@ -88,11 +92,13 @@ the egress guards were then added (mutation-verified to bite).
 
 ## Repository health (as of this update)
 
-- **`main` = `b3ffe5c`, in sync with `origin/main`.** Task 6 backend merged
-  (Slices 1 + 2a + the hub `[workspace]` fix). Clean tree.
-- **197 tests passing**; **`cargo fmt` clean; `clippy -W clippy::pedantic` 0
-  warnings; comment-density gate 0 failures.** (Backend only — the hub native
-  build is a separate, blocked concern; see the blocker.)
+- **`main` = `b3ffe5c`** (Task 6 backend). **Task 6b on branch
+  `task-6b-hub-unblock`** (hub unblocked + Week UI + launch scripts), merging
+  after final review.
+- **197 workspace tests passing**; **`cargo fmt` clean; `clippy -W
+  clippy::pedantic` 0 warnings; comment-density gate 0 failures.** The hub
+  (`apps/hub-tauri`, outside the workspace) builds clean (`cargo build` +
+  `npm run build`) and runs live; it has no automated tests beyond `vite build`.
 - Migrations `0001`–`0004`; a live `project-map.js` at repo root tracks status
   (keep it in sync on changes).
 
@@ -130,32 +136,35 @@ then P3:
 - **P5** Notifications (three-level) + hub-at-rest + LED — not built
 - **P6** Polish + accessibility + pilot — not built
 
-## ⛔ Hub build blocker (Task 6 — the reason the hub half is deferred)
+## How the hub was unblocked (Task 6b) — corrects an earlier misdiagnosis
 
-The hub's **native (Tauri) side does not compile on this machine**, and never had
-(it was only ever `vite build`-checked). Bringing it up for Task 6 surfaced:
+The hub's native (Tauri) side had never compiled (only ever `vite build`-checked).
+Task 6 attributed the failure to an **upstream `tauri-macros` bug** on rustc
+1.88–1.95. **That was wrong.** The real cause, per current Tauri v2 docs, is a
+long-standing, version-independent property of `#[tauri::command]`: a command
+function marked **`pub` and colocated in the same file as `tauri::generate_handler!`**
+collides with its own generated helper macro (**E0255**). Task 6b's fix, on the
+current toolchain and latest Tauri (no version changes):
 
-- **Fixed:** `src-tauri` was silently pulled into the amity Cargo workspace →
-  gave it its own empty `[workspace]` root (commit on the branch).
-- **Blocking (upstream):** `tauri-macros 2.6.3` (the latest — `cargo update` finds
-  nothing newer) generates a `#[tauri::command]` helper as `macro_rules! X; use X;`
-  in one module, which rustc rejects as **E0255 "defined multiple times."** It
-  fails on **every rustc from 1.88 to 1.95** (deps need ≥1.88; the E0255 is present
-  by 1.90), so no toolchain in range works. Edition 2021↔2024 makes no difference.
-  A bounded Tauri **downgrade** attempt cascaded into a `tauri-build`/`tauri-utils`
-  mismatch — a full `tauri-*`-family pin would be needed.
+- **Dropped `pub`** from all six `#[tauri::command]` fns in `src-tauri/src/lib.rs`
+  → all 13 E0255 errors gone. (They must stay non-`pub`; see the hub README.)
+- Provided **placeholder app icons** (`generate_context!` needs them) and wired
+  `tauri.conf.json`.
+- Fixed `tauri.conf.json` to use **npm** (not `pnpm`) for its dev/build commands.
+- Kept the earlier, legitimate **`[workspace]`** fix (src-tauri as its own root).
 
-**To unblock later (a follow-up task):** wait for an upstream `tauri-macros`
-release, or pin the whole `tauri-*` family to a consistent older set on stable
-rustc, then verify `cargo build` in `apps/hub-tauri/src-tauri`, add a `run-hub`
-launch script + prereq doc (Ubuntu deps: `libwebkit2gtk-4.1-dev build-essential
-curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`),
-and build the Week **UI** against the ready `/api/v1/week` endpoint.
+The hub now builds and runs live via **`scripts/run-hub.sh`** (starts
+`amity-service` on 127.0.0.1:7890 + the hub; `AMITY_KIOSK=1` for fullscreen).
+**`scripts/seed-demo.sh`** populates the current week for a visual check. Ubuntu
+prereqs are in `apps/hub-tauri/README.md`. The Week grid was **visually verified**
+by the maintainer.
 
 ## Known carry-overs / deferred items (none blocking)
 
-- **Hub live prototype + Week UI** — deferred by the blocker above (the roadmap
-  "next" marker points here).
+- **Hub-at-rest UI** (clock/weather/ambient) — not built; the maintainer wants it
+  eventually to be *calm but not bland* (see the aesthetic-direction note in
+  Claude Code memory). This is roadmap P5 / "Task 7".
+- Placeholder hub icons — swap for a real Amity icon when there is one.
 - **Hub frontend has no JS test runner** — only `vite build` type-checks it.
 - Optional **ICS Task 7** (read-only Calendars list in the hub) was not built.
 - Minor (from Task 6 reviews): a **pre-existing** Cancel-vs-later-overlay
@@ -167,12 +176,22 @@ and build the Week **UI** against the ready `/api/v1/week` endpoint.
 - `SyncReport.calendars_synced` counts **attempts, not successes**; no direct
   test for `delete_calendar`'s instance cascade (code verified by inspection).
 
-## Next task: P2 · Meals, Lists & Pantry (decided 2026-08-20)
+## Next task: undecided — P2 (Meals) vs Task 7 (at-rest UI)
 
-The maintainer chose **P2 — Meals, Lists & Pantry** (the meal→groceries pipeline)
-as the next task: pure backend, so it entirely sidesteps the blocked hub. The
-roadmap "next" marker points here. The hub live-prototype + Week UI follow-up
-stays deferred (blocked upstream) until Tauri is fixed.
+Two candidates, and Claude.ai should pick:
+
+- **P2 · Meals, Lists & Pantry** — the maintainer's earlier explicit choice; pure
+  backend, MVP-core (the physical chalkboard it replaces shows **who cooks each
+  day + a short menu**, so the Meals model needs a per-day cook + a short menu
+  string — see the aesthetic-direction memory). **Recommended as the immediate
+  next.**
+- **Task 7 · hub at-rest UI + weather** — the roadmap "next" marker names this
+  (per the Task 6b brief), but the maintainer framed the ambient/at-rest look as
+  *"eventually, not now."* So it's likely *after* P2, not before.
+
+The `project-map.js` "next" marker currently says Task 7 (following the 6b
+brief); given the "eventually" framing, treat **P2 as the more likely immediate
+next** and re-point the marker when Claude.ai confirms.
 
 **P2 scope, from the brief** (§18.1 Weeks 3–4; for Claude.ai to turn into a task
 brief): Meals + Lists + PantryItem entities, and the meal-to-groceries pipeline

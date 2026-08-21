@@ -7,6 +7,7 @@
 //   capture_inbox_item  — POST /api/v1/inbox, returns the created item as JSON.
 //   list_recent_inbox   — GET /api/v1/inbox/recent?limit=N, returns array of items.
 //   surfacing_today     — GET /api/v1/surfacing/today?date=…, the Today view.
+//   week                — GET /api/v1/week?start=…, the Week view.
 //   create_task         — POST /api/v1/tasks, from the capture form.
 //   complete_task       — POST /api/v1/tasks/{id}/complete, mark an instance done.
 //   change_assignee     — POST /api/v1/tasks/{id}/assignee, one-tap reassignment.
@@ -67,7 +68,7 @@ struct CaptureRequest {
 /// toast notifications, no animated error states — consistent with the calm
 /// aesthetic.
 #[tauri::command]
-pub async fn capture_inbox_item(raw_text: String) -> Result<InboxItem, String> {
+async fn capture_inbox_item(raw_text: String) -> Result<InboxItem, String> {
     let client = reqwest::Client::new();
 
     let body = CaptureRequest {
@@ -103,7 +104,7 @@ pub async fn capture_inbox_item(raw_text: String) -> Result<InboxItem, String> {
 ///
 /// Returns a string error if the HTTP request fails.
 #[tauri::command]
-pub async fn list_recent_inbox(limit: u32) -> Result<Vec<InboxItem>, String> {
+async fn list_recent_inbox(limit: u32) -> Result<Vec<InboxItem>, String> {
     let client = reqwest::Client::new();
 
     // Cap at 100 to match the service's own maximum, even though the service
@@ -155,6 +156,10 @@ pub struct SurfacedItem {
     pub priority: Option<u8>,
     /// UUID of the member shown as responsible; absent when unset.
     pub current_assignee_id: Option<String>,
+    /// A household note from an `Annotate` override; absent when there is none.
+    pub annotation: Option<String>,
+    /// True when a `Reschedule` override moved this instance to a new time.
+    pub rescheduled: bool,
 }
 
 /// The Today response envelope, mirroring `TodayResponse` in amity-service.
@@ -166,6 +171,28 @@ pub struct TodayResponse {
     pub has_surfaced: bool,
     /// The surfaced items, already ordered by the service.
     pub items: Vec<SurfacedItem>,
+}
+
+/// One day's bucket in a `WeekResponse`, mirroring `WeekDayResponse` in
+/// amity-service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeekDay {
+    /// The calendar date this bucket is for (`YYYY-MM-DD`).
+    pub date: String,
+    /// The items placed on this day, already ordered by the service's layout
+    /// rule (all-day first, then events before tasks, then by salient time).
+    pub items: Vec<SurfacedItem>,
+}
+
+/// The Week response envelope, mirroring `WeekResponse` in amity-service.
+///
+/// Always exactly 7 `days`, Monday-first.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeekResponse {
+    /// The Monday this week starts on (`YYYY-MM-DD`).
+    pub start: String,
+    /// Exactly 7 day buckets, `start` through `start + 6 days`, in order.
+    pub days: Vec<WeekDay>,
 }
 
 /// Request body for creating a task; unset fields are omitted from the JSON.
@@ -265,11 +292,31 @@ async fn post_ok<B: Serialize>(url: String, body: &B) -> Result<(), String> {
 ///
 /// Returns a message the frontend can display if the service is unreachable.
 #[tauri::command]
-pub async fn surfacing_today(date: Option<String>) -> Result<TodayResponse, String> {
+async fn surfacing_today(date: Option<String>) -> Result<TodayResponse, String> {
     // Build the URL, appending the optional date query parameter.
     let mut url = format!("{SERVICE_BASE_URL}/api/v1/surfacing/today");
     if let Some(date) = date {
         url = format!("{url}?date={date}");
+    }
+    // Delegate to the shared GET helper.
+    get_json(url).await
+}
+
+/// Fetch the Week view (`GET /api/v1/week`), optionally anchored to a date.
+///
+/// Called on mount of the Week view and on prev/next navigation. `start` is
+/// any date inside the target week (`YYYY-MM-DD`); when absent the service
+/// resolves "this week" from its own current date.
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable.
+#[tauri::command]
+async fn week(start: Option<String>) -> Result<WeekResponse, String> {
+    // Build the URL, appending the optional start query parameter.
+    let mut url = format!("{SERVICE_BASE_URL}/api/v1/week");
+    if let Some(start) = start {
+        url = format!("{url}?start={start}");
     }
     // Delegate to the shared GET helper.
     get_json(url).await
@@ -285,7 +332,7 @@ pub async fn surfacing_today(date: Option<String>) -> Result<TodayResponse, Stri
 ///
 /// Returns the service's 422 message for invalid input (e.g. an empty title).
 #[tauri::command]
-pub async fn create_task(
+async fn create_task(
     title: String,
     notes: Option<String>,
     due_by: Option<String>,
@@ -315,7 +362,7 @@ pub async fn create_task(
 ///
 /// Returns a message on transport failure or a non-2xx status.
 #[tauri::command]
-pub async fn complete_task(id: String, instance_date: String) -> Result<(), String> {
+async fn complete_task(id: String, instance_date: String) -> Result<(), String> {
     // The completion body only needs the instance date.
     let body = CompleteBody { instance_date };
     // POST to the task's complete sub-resource.
@@ -335,7 +382,7 @@ pub async fn complete_task(id: String, instance_date: String) -> Result<(), Stri
 ///
 /// Returns a message on transport failure or a non-2xx status.
 #[tauri::command]
-pub async fn change_assignee(id: String, member_id: Option<String>) -> Result<(), String> {
+async fn change_assignee(id: String, member_id: Option<String>) -> Result<(), String> {
     // The body carries the new assignee id (or null to clear it).
     let body = AssigneeBody { member_id };
     // POST to the task's assignee sub-resource.
@@ -359,10 +406,24 @@ pub fn run() {
             capture_inbox_item,
             list_recent_inbox,
             surfacing_today,
+            week,
             create_task,
             complete_task,
             change_assignee,
         ])
+        // Kiosk mode: when AMITY_KIOSK=1 (set by scripts/run-hub.sh), start the
+        // window fullscreen for the wall-mounted hub. Default (unset/other) is a
+        // normal window. A missing window or a set-fullscreen failure is ignored
+        // — kiosk is a display preference, never a reason to fail startup.
+        .setup(|app| {
+            use tauri::Manager;
+            if std::env::var("AMITY_KIOSK").is_ok_and(|v| v == "1") {
+                for (_label, window) in app.webview_windows() {
+                    let _ = window.set_fullscreen(true);
+                }
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

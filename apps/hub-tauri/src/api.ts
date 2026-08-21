@@ -21,7 +21,7 @@ export interface InboxItem {
   triaged_to?: string;
 }
 
-/** One item on the Today view. `at` is an RFC 3339 instant. */
+/** One item on the Today or Week view. `at` is an RFC 3339 instant. */
 export interface SurfacedItem {
   kind: string; // "task" | "event"
   source_id: string;
@@ -31,6 +31,10 @@ export interface SurfacedItem {
   all_day: boolean;
   priority?: number;
   current_assignee_id?: string;
+  /** A household note from an override; absent when there is none. */
+  annotation?: string;
+  /** True when an override moved this instance to a new time. */
+  rescheduled: boolean;
 }
 
 /** The Today response envelope. */
@@ -38,6 +42,22 @@ export interface TodayResponse {
   date: string;
   has_surfaced: boolean;
   items: SurfacedItem[];
+}
+
+/** One day's bucket in a `WeekResponse`. */
+export interface WeekDay {
+  /** The calendar date this bucket is for (YYYY-MM-DD). */
+  date: string;
+  /** Items placed on this day, already ordered by the service — do not re-sort. */
+  items: SurfacedItem[];
+}
+
+/** The Week response envelope: exactly 7 days, Monday-first. */
+export interface WeekResponse {
+  /** The Monday this week starts on (YYYY-MM-DD). */
+  start: string;
+  /** Exactly 7 day buckets, `start` through `start + 6 days`, in order. */
+  days: WeekDay[];
 }
 
 /** Input for creating a task. Optional fields are omitted from the request. */
@@ -67,6 +87,12 @@ export function listRecentInbox(limit: number): Promise<InboxItem[]> {
 /** Fetch the Today view; `date` is optional (YYYY-MM-DD). */
 export function surfacingToday(date?: string): Promise<TodayResponse> {
   return invoke<TodayResponse>("surfacing_today", { date: date ?? null });
+}
+
+/** Fetch the Week view; `start` is optional (any date inside the target week,
+ * YYYY-MM-DD) — absent means "this week". */
+export function week(start?: string): Promise<WeekResponse> {
+  return invoke<WeekResponse>("week", { start: start ?? null });
 }
 
 /** Create a task from the capture form. */

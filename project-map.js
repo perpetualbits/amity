@@ -28,7 +28,7 @@ window.PROJECT_MAP = {
     name: "amity",
     tagline: "a peaceful home — project map",
     repo: "github.com/perpetualbits/amity",
-    updated: "2026-08-19",
+    updated: "2026-08-20",
   },
 
   // ── Status vocabulary ─────────────────────────────────────────────────────
@@ -74,12 +74,12 @@ window.PROJECT_MAP = {
       status: "active",
       tags: ["Tauri", "Solid", "Phase 1", "Task 3"],
       desc:
-        "The kitchen hub — a Tauri 2 shell with a Solid frontend. Two views sit " +
-        "behind a segmented control: Capture (the inbox) and Today (the ranked " +
-        "surface, with mark-done / reassign and an inline task-capture form). " +
-        "These type-check and bundle, but have not been run live — hub-tauri is " +
-        "outside the Cargo workspace and needs WebKit2GTK. The hub-at-rest design " +
-        "(clock, weather, status patch, ambient LED) is still to come, so the " +
+        "The kitchen hub — a Tauri 2 shell with a Solid frontend. Three views sit " +
+        "behind a segmented control: Capture (the inbox), Today (the ranked " +
+        "surface, with mark-done / reassign and inline task capture), and Week (a " +
+        "read-only 7-day grid). As of Task 6b the hub BUILDS and RUNS LIVE on the " +
+        "dev machine (WebKit2GTK installed; `scripts/run-hub.sh` launches it). The " +
+        "hub-at-rest design (clock, weather, ambient LED) is still to come, so the " +
         "surface as a whole stays in progress.",
       files: [
         "apps/hub-tauri/src/App.tsx",
@@ -99,7 +99,7 @@ window.PROJECT_MAP = {
         { label: "Capture / Today switch", status: "done", desc: "A two-item segmented control; no router." },
         { label: "Today view", status: "done", desc: "Renders /surfacing/today as a mixed task+event list with a per-item kind marker (○ task / ◆ event); events show \"all day\" and carry no actions. Mark-done, reassign, and a calm empty state (type-checked, not yet run live)." },
         { label: "Task capture form", status: "done", desc: "Title, notes, due, tags, and a recurrence preset that builds the RRULE (not yet run live)." },
-        { label: "Week view (UI)", status: "planned", desc: "BLOCKED, not built: the hub's native (Tauri) side does not compile on this machine — tauri-macros 2.6.3 (latest) trips E0255 on every rustc 1.88–1.95. Week backend + /week are ready; the SolidJS Week grid + live bring-up wait on an upstream tauri fix (or a full tauri-* family downgrade)." },
+        { label: "Week view (UI)", status: "done", desc: "The SolidJS Week grid (Task 6b): 7-column landscape (stacks under 900px), today marked, event/all-day/rescheduled/annotation markers, prev/next/this-week nav, read-only. The hub now builds and runs live — the earlier E0255 was a local issue (a pub #[tauri::command] colocated with generate_handler!), fixed by dropping pub + adding icons, NOT an upstream/rustc bug." },
         { label: "Hub-at-rest (clock / weather / LED)", status: "planned", desc: "The calm screensaver baseline from brief §11.5–11.6." },
       ],
       deps: ["api"],
@@ -224,7 +224,7 @@ window.PROJECT_MAP = {
         { label: "Empty-state result (has_surfaced)", status: "done", desc: "\"nothing today\" is a real result, not an error — brief §3." },
         { label: "Cross-entity ranking", status: "active", desc: "Task and Event now rank together through the kind-agnostic rule; Project and Thread still to come." },
         { label: "Today view", status: "done", desc: "The hub renders the mixed stream with a per-item kind marker (type-checked; live run pending WebKit)." },
-        { label: "Week view", status: "active", desc: "Backend shipped (Task 6): pure plan_week planner (Mon-start 7-day buckets, overrides applied, open tasks only) + GET /week endpoint. The hub UI is blocked — see the hub node." },
+        { label: "Week view", status: "done", desc: "Backend (Task 6): pure plan_week planner (Mon-start 7-day buckets, overrides applied, open tasks only) + GET /week. Hub grid shipped in Task 6b (see the hub node)." },
       ],
       deps: ["task", "event", "api"],
     },
@@ -648,13 +648,14 @@ window.PROJECT_MAP = {
   // linear plan: the maintainer built vertically — foundation plus the Task
   // backend and its recurrence engine — rather than strictly phase by phase, so
   // phases 1, 3 and 4 are all partly done at once while 2, 5 and 6 are untouched.
-  // Task 6 shipped its backend (Reschedule/Annotate overrides + the Week-view
-  // planner and /week endpoint). Its hub half — the live prototype and the Week
-  // UI — is blocked by an upstream tauri-macros/E0255 build failure (see the hub
-  // node), so it is deferred. The actively-scheduled next task is P2 (Meals,
-  // Lists & Pantry) — pure backend, which sidesteps the hub blocker.
+  // Task 6 (overrides + Week backend) and Task 6b (hub unblocked, runs live,
+  // Week UI shipped) are both done — the hub prototype is now visible. The 6b
+  // brief names Task 7 (at-rest UI + weather) as the next marker. NOTE: the
+  // maintainer earlier chose P2 (Meals, Lists & Pantry) as next and has framed
+  // the ambient/at-rest UI as "eventually, not now" — so P2 is the likely better
+  // immediate next; Claude.ai to confirm P2-vs-Task-7 order.
   roadmap: [
-    { id: "next-p2", kind: "next", label: "P2 · Meals, Lists & Pantry (meal→groceries)", status: "planned" },
+    { id: "next-t7", kind: "next", label: "Task 7 · hub at-rest UI + weather (not scoped)", status: "planned" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
     { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },
