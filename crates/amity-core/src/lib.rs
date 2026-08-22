@@ -81,3 +81,24 @@ pub mod event;
 /// Lets the household record "bin day moved for King's Day" without writing
 /// back to the source. See brief §6.5 (`EventOverride`).
 pub mod event_override;
+
+/// `GrocerySource`, `GroceryList`, `GroceryListBuilder`, `GroceryItem`,
+/// `GroceryItemBuilder`, `GroceryError`, and `plan_grocery_additions`.
+///
+/// P2 Slice 1 (meals, lists & pantry): the pure grocery-generation function
+/// that turns planned meals into grocery-list additions without clobbering
+/// pantry staples or items already on the list.
+pub mod grocery;
+
+/// `MealSlot`, `IngredientLine`, `Meal`, `MealBuilder`, `MealError`.
+///
+/// P2 Slice 1 (meals, lists & pantry): a single planned meal on a single
+/// date, with freetext ingredient lines. No recipes or cook-assignment logic.
+pub mod meal;
+
+/// `PantryItem`, `PantryItemBuilder`, `PantryError`.
+///
+/// P2 Slice 1 (meals, lists & pantry): a lightweight staples-memory used to
+/// suppress already-stocked ingredients during grocery generation. No
+/// levels, thresholds, or depletion tracking.
+pub mod pantry;

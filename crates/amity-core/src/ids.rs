@@ -169,6 +169,36 @@ define_id!(
     EventOverrideId
 );
 
+define_id!(
+    /// Unique identifier for a [`Meal`](crate::meal::Meal).
+    ///
+    /// P2 Slice 1 (meals, lists & pantry). Time-ordered UUID v7 keeps related
+    /// meal rows physically adjacent in the B-tree index.
+    MealId
+);
+
+define_id!(
+    /// Unique identifier for a [`GroceryList`](crate::grocery::GroceryList).
+    ///
+    /// P2 Slice 1 (meals, lists & pantry).
+    GroceryListId
+);
+
+define_id!(
+    /// Unique identifier for a [`GroceryItem`](crate::grocery::GroceryItem).
+    ///
+    /// P2 Slice 1 (meals, lists & pantry).
+    GroceryItemId
+);
+
+define_id!(
+    /// Unique identifier for a [`PantryItem`](crate::pantry::PantryItem).
+    ///
+    /// P2 Slice 1 (meals, lists & pantry). Pantry items are a lightweight
+    /// staples-memory — no levels, thresholds, or depletion tracking.
+    PantryItemId
+);
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
