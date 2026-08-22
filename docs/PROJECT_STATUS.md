@@ -1,6 +1,6 @@
 # Amity — Project Status Report
 
-*Living handoff document. Last updated 2026-08-20 (Tasks 6 + 6b done; **hub runs live**; next: P2 vs Task 7 — see end).*
+*Living handoff document. Last updated 2026-08-22 (Task 8 / P2 Meals-Lists-Pantry done; **next: Task 7 · at-rest UI**).*
 *Update this file whenever a task lands (it is the source of truth Claude.ai reads to prepare the next prompt).*
 
 ## Working model (henceforth)
@@ -19,8 +19,10 @@ survives a fresh Claude Code session.
 
 A **local-first household planner** ("a peaceful home") — a Rust service + tablet
 "hub" that helps a family of 3–6 run their week: capture-to-inbox, a ranked
-**Today** view, tasks & chores with fair rotation, an aggregated calendar, and
-(planned) meals/lists/notifications. Design ethos: **information over pressure**,
+**Today** view, tasks & chores (recurrence + a *manual* assignee — never
+auto-rotated; planner, not mediator), an aggregated calendar, meal planning with
+a grocery pipeline, and (planned) notifications. Design ethos: **information over
+pressure**,
 privacy-first, no surveillance or commercial data flow. Full brief in
 `docs/amity_brief.md`; philosophy in `docs/amity_philosophy.md`.
 
@@ -31,23 +33,22 @@ Rust **Cargo workspace**, three crates with a strict dependency direction:
 - **`amity-core`** (~5,770 LOC) — pure domain, **no I/O** (no tokio/sqlx/reqwest).
   Entities, builders, the recurrence engine, ICS parsing, and the
   surfacing/ranking logic. Clock is always injected (`now: OffsetDateTime`).
-- **`amity-storage`** (~3,250 LOC) — `sqlx` + **SQLite STRICT**; migrations
-  `0001`–`0004`; one repository module per entity. RFC-3339 TEXT datetimes, TEXT
-  UUID-v7 ids, INTEGER 0/1 bools, enums via `Display`/`FromStr` snake_case.
-- **`amity-service`** (~4,590 LOC) — `axum` HTTP API (one module per entity),
-  background **jobs** (`recurrence_horizon`, `calendar_sync`), and `feeds` (the
-  one outbound egress). Loopback-only.
-- **`apps/hub-tauri`** — SolidJS + Tauri v2 frontend (`Capture`, `Today` views).
-  **Deliberately outside the workspace** (its own `[workspace]` root as of Task 6).
-  WebKit2GTK **is now installed** (2.52.3), and `vite build` (frontend) passes —
-  but the **native Tauri side does not compile** (see the blocker below), so the
-  hub still cannot run live here. It had only ever been `vite build`-checked, which
-  hid this.
+- **`amity-storage`** — `sqlx` + **SQLite STRICT**; migrations `0001`–`0005`; one
+  repository module per entity. RFC-3339 TEXT datetimes, TEXT UUID-v7 ids,
+  INTEGER 0/1 bools, enums via `Display`/`FromStr` snake_case.
+- **`amity-service`** — `axum` HTTP API (one module per entity: inbox, task,
+  event, calendar, meal, grocery, pantry, surfacing), background **jobs**
+  (`recurrence_horizon`, `calendar_sync`), and `feeds` (the one outbound egress).
+  Loopback-only.
+- **`apps/hub-tauri`** — SolidJS + Tauri v2 frontend, five views (Today, Week,
+  Capture, Menu, Groceries). **Deliberately outside the workspace** (its own
+  `[workspace]` root). WebKit2GTK installed; the hub **builds and runs live** via
+  `scripts/run-hub.sh` (Tauri commands must stay non-`pub` — see the hub README).
 
 **ADRs:** `0001` initial architecture · `0002` recurrence engine · `0003`
 deferred task fields · `0004` external calendar ingestion.
 
-## What's been built (Tasks 1–5 on `main`; Task 6 backend on branch `task-6-hub-live-week`)
+## What's been built (Tasks 1–8 — all on `main` once P2 merges)
 
 | Task | Area | State |
 |---|---|---|
@@ -58,6 +59,17 @@ deferred task fields · `0004` external calendar ingestion.
 | **5** | **ICS ingestion & external calendars** (read-only aggregation) | done |
 | **6** | Event **overrides** in surfacing + **Week view backend** | done |
 | **6b** | Unblock the hub, run it live, ship the **Week UI** | done — **hub runs live** |
+| **8 / P2** | **Meals, Lists & Pantry** (+ grocery generation, meal on Today) | done |
+
+**Task 8 / P2 detail** (most recent): `Meal` (date, slot, name, optional cook,
+optional freetext ingredient lines — **no recipes**), `GroceryList`/`GroceryItem`,
+and a **lightweight `PantryItem`** (staples that *suppress* generation — no
+levels/thresholds); a pure `plan_grocery_additions` with a proven **no-clobber**
+regenerate property; migration 0005; CRUD APIs + a `POST /grocery-lists/{id}/generate`
+endpoint; **Menu** + **Groceries** hub views (run live, maintainer-accepted); and
+tonight's dinner surfacing on **Today** as an informational `SurfacedKind::Meal`
+(not on Week). Known limitation: **cook displays as an id/"cook assigned", not a
+name** — no member-name registry yet (the `people` entity is still a placeholder).
 
 **Task 6 detail** (most recent): **Slice 1** — `Reschedule` and `Annotate`
 overrides now apply in surfacing (only `Cancel` did before), on the shared
@@ -92,14 +104,14 @@ the egress guards were then added (mutation-verified to bite).
 
 ## Repository health (as of this update)
 
-- **`main` = `b3ffe5c`** (Task 6 backend). **Task 6b on branch
-  `task-6b-hub-unblock`** (hub unblocked + Week UI + launch scripts), merging
-  after final review.
-- **197 workspace tests passing**; **`cargo fmt` clean; `clippy -W
-  clippy::pedantic` 0 warnings; comment-density gate 0 failures.** The hub
-  (`apps/hub-tauri`, outside the workspace) builds clean (`cargo build` +
-  `npm run build`) and runs live; it has no automated tests beyond `vite build`.
-- Migrations `0001`–`0004`; a live `project-map.js` at repo root tracks status
+- **Task 8 / P2 on branch `task-p2-meals`** (5 slices: entities, storage,
+  service, hub, housekeeping), merging after final review; `main` was at `a08aff5`
+  (Task 6b).
+- **Workspace tests all green**; **`cargo fmt` clean; `clippy -W clippy::pedantic`
+  0 warnings; comment-density gate 0 failures.** The hub (`apps/hub-tauri`,
+  outside the workspace) builds clean (`cargo build` + `npm run build`) and runs
+  live; it has no automated tests beyond `vite build`.
+- Migrations `0001`–`0005`; a live `project-map.js` at repo root tracks status
   (keep it in sync on changes).
 
 ## Engineering guardrails (Claude Code operates under these — bake into prompts)
@@ -176,33 +188,22 @@ by the maintainer.
 - `SyncReport.calendars_synced` counts **attempts, not successes**; no direct
   test for `delete_calendar`'s instance cascade (code verified by inspection).
 
-## Next task: undecided — P2 (Meals) vs Task 7 (at-rest UI)
+## Next task: Task 7 · hub at-rest UI + weather
 
-Two candidates, and Claude.ai should pick:
+P2 is done, so the roadmap "next" marker is **Task 7 — the hub-at-rest UI**
+(clock / weather / ambient), which now has real content to design around (Today,
+Week, and tonight's menu). This is where the maintainer's **aesthetic direction**
+applies: *calm but not bland*, ambient, reflecting household activity (work,
+study, building, sports) — **not busy, not in-your-face** (see the
+`hub-aesthetic-direction` memory; load the `frontend-design` skill when scoping
+it). A natural companion is a **member-name registry** — the `people` entity is
+still a placeholder, so cook/assignee currently render as ids, not names; wiring
+real member names lets Menu/Today show "Alice cooks tonight."
 
-- **P2 · Meals, Lists & Pantry** — the maintainer's earlier explicit choice; pure
-  backend, MVP-core (the physical chalkboard it replaces shows **who cooks each
-  day + a short menu**, so the Meals model needs a per-day cook + a short menu
-  string — see the aesthetic-direction memory). **Recommended as the immediate
-  next.**
-- **Task 7 · hub at-rest UI + weather** — the roadmap "next" marker names this
-  (per the Task 6b brief), but the maintainer framed the ambient/at-rest look as
-  *"eventually, not now."* So it's likely *after* P2, not before.
+Other unblocked candidates if Task 7 waits: P5 · Notifications; the deferred
+"structure grows with use" meal features (recipes, pantry thresholds, use-first
+list); dietary-flag warnings (brief §9.3).
 
-The `project-map.js` "next" marker currently says Task 7 (following the 6b
-brief); given the "eventually" framing, treat **P2 as the more likely immediate
-next** and re-point the marker when Claude.ai confirms.
-
-**P2 scope, from the brief** (§18.1 Weeks 3–4; for Claude.ai to turn into a task
-brief): Meals + Lists + PantryItem entities, and the meal-to-groceries pipeline
-end-to-end *without recipes* (per §18.1). MVP definition-of-done touchpoints
-(§18.3): "Menu planned, groceries generated and checked off on mobile." Mirror the
-established entity pattern (builder + clock injection in `amity-core`, a
-migration + repository in `amity-storage`, an axum API module in `amity-service`,
-subagent-driven with TDD and the gates below).
-
-**Awaiting the P2 task brief from Claude.ai** (drop it in `docs/prompts/`, same as
-the Task 6 brief). A good Claude Code prompt: names the task + acceptance
-criteria, points at the entity patterns to mirror (`task.rs`/`event.rs` +
-their storage/API), restates the guardrails above, and asks for a brief plan
-first. Claude Code sets the `project-map.js` "next" marker as part of the work.
+When Claude.ai picks, drop the task brief in `docs/prompts/`. A good Claude Code
+prompt names the task + acceptance criteria, points at the patterns to mirror,
+restates the guardrails, and asks for a plan first.
