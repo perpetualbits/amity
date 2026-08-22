@@ -70,6 +70,93 @@ export interface CreateTaskInput {
   tags?: string[];
 }
 
+/** One freetext ingredient line on a meal. */
+export interface IngredientLine {
+  name: string;
+  qty?: string;
+}
+
+/** A planned meal, as returned by the meal commands. */
+export interface Meal {
+  id: string;
+  /** The meal's calendar date (YYYY-MM-DD). */
+  date: string;
+  /** "dinner" | "breakfast" | "lunch" | "other". */
+  slot: string;
+  name: string;
+  /** UUID of the cook, if assigned. */
+  cook?: string;
+  ingredient_lines: IngredientLine[];
+  notes?: string;
+  created_at: string;
+}
+
+/** Input for planning a meal from the Menu view's plan-a-meal form. */
+export interface CreateMealInput {
+  name: string;
+  /** YYYY-MM-DD. */
+  date: string;
+  slot?: string;
+  /** UUID of the cook, if assigned. */
+  cook?: string;
+  ingredientLines?: IngredientLine[];
+  notes?: string;
+}
+
+/** A grocery list. */
+export interface GroceryList {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+/** One item on a grocery list. */
+export interface GroceryItem {
+  id: string;
+  list_id: string;
+  name: string;
+  qty?: string;
+  /** Free-form category, for grouping in the UI. */
+  category?: string;
+  checked: boolean;
+  /** "manual" | "from_meal". */
+  source: string;
+  /** UUID of the meal this item was generated from; absent for manual items. */
+  source_meal_id?: string;
+  created_at: string;
+}
+
+/** Input for manually adding a grocery item. */
+export interface AddGroceryItemInput {
+  name: string;
+  qty?: string;
+  category?: string;
+}
+
+/** Result of generating grocery additions from planned meals. */
+export interface GenerateGroceriesResult {
+  /** The resolved inclusive lower bound of the meal date range used (YYYY-MM-DD). */
+  from: string;
+  /** The resolved inclusive upper bound of the meal date range used (YYYY-MM-DD). */
+  to: string;
+  /** The newly-added items (may be empty). */
+  added: GroceryItem[];
+}
+
+/** A pantry staple. */
+export interface PantryItem {
+  id: string;
+  name: string;
+  note?: string;
+  created_at: string;
+}
+
+/** Input for recording a pantry staple. */
+export interface AddPantryInput {
+  name: string;
+  note?: string;
+}
+
 // ─── Inbox ──────────────────────────────────────────────────────────────────
 
 /** Capture a free-text inbox item; returns the created item. */
@@ -108,6 +195,94 @@ export function completeTask(id: string, instanceDate: string): Promise<void> {
 /** Change a task's current assignee (null clears it). */
 export function changeAssignee(id: string, memberId: string | null): Promise<void> {
   return invoke<void>("change_assignee", { id, memberId });
+}
+
+// ─── Meals ──────────────────────────────────────────────────────────────────
+
+/** List meals, optionally within a date range (YYYY-MM-DD, both or neither). */
+export function listMeals(from?: string, to?: string): Promise<Meal[]> {
+  return invoke<Meal[]>("list_meals", { from: from ?? null, to: to ?? null });
+}
+
+/** Plan a meal from the Menu view's plan-a-meal form. Returns the created meal. */
+export function createMeal(input: CreateMealInput): Promise<Meal> {
+  return invoke<Meal>("create_meal", {
+    name: input.name,
+    date: input.date,
+    slot: input.slot ?? null,
+    cook: input.cook ?? null,
+    ingredientLines: input.ingredientLines ?? null,
+    notes: input.notes ?? null,
+  });
+}
+
+// ─── Groceries ──────────────────────────────────────────────────────────────
+
+/** List every grocery list. */
+export function listGroceryLists(): Promise<GroceryList[]> {
+  return invoke<GroceryList[]>("list_grocery_lists");
+}
+
+/** Create a grocery list. Returns the created list. */
+export function createGroceryList(name: string): Promise<GroceryList> {
+  return invoke<GroceryList>("create_grocery_list", { name });
+}
+
+/** List a grocery list's items. */
+export function listGroceryItems(listId: string): Promise<GroceryItem[]> {
+  return invoke<GroceryItem[]>("list_grocery_items", { listId });
+}
+
+/** Manually add a grocery item. Returns the created item. */
+export function addGroceryItem(listId: string, input: AddGroceryItemInput): Promise<GroceryItem> {
+  return invoke<GroceryItem>("add_grocery_item", {
+    listId,
+    name: input.name,
+    qty: input.qty ?? null,
+    category: input.category ?? null,
+  });
+}
+
+/** Toggle a grocery item's checked state — the one free-tap mutation on Groceries. */
+export function checkGroceryItem(id: string, checked: boolean): Promise<void> {
+  return invoke<void>("check_grocery_item", { id, checked });
+}
+
+/** Remove a grocery item. */
+export function deleteGroceryItem(id: string): Promise<void> {
+  return invoke<void>("delete_grocery_item", { id });
+}
+
+/** Generate grocery additions from planned meals in a date range (absent means
+ * the service's own default: the current Monday-Sunday week). Returns only the
+ * newly-added items. */
+export function generateGroceries(
+  listId: string,
+  from?: string,
+  to?: string,
+): Promise<GenerateGroceriesResult> {
+  return invoke<GenerateGroceriesResult>("generate_groceries", {
+    listId,
+    from: from ?? null,
+    to: to ?? null,
+  });
+}
+
+// ─── Pantry ─────────────────────────────────────────────────────────────────
+
+/** List every pantry staple. */
+export function listPantry(): Promise<PantryItem[]> {
+  return invoke<PantryItem[]>("list_pantry");
+}
+
+/** Record a pantry staple. Returns the created item. */
+export function addPantry(input: AddPantryInput): Promise<PantryItem> {
+  return invoke<PantryItem>("add_pantry", { name: input.name, note: input.note ?? null });
+}
+
+/** Remove a pantry staple. */
+export function deletePantry(id: string): Promise<void> {
+  return invoke<void>("delete_pantry", { id });
 }
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────

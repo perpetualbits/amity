@@ -11,10 +11,24 @@
 //   create_task         — POST /api/v1/tasks, from the capture form.
 //   complete_task       — POST /api/v1/tasks/{id}/complete, mark an instance done.
 //   change_assignee     — POST /api/v1/tasks/{id}/assignee, one-tap reassignment.
+//   list_meals          — GET /api/v1/meals?from=&to=, the Menu view's data.
+//   create_meal         — POST /api/v1/meals, from the Menu view's plan-a-meal form.
+//   list_grocery_lists  — GET /api/v1/grocery-lists.
+//   create_grocery_list — POST /api/v1/grocery-lists.
+//   list_grocery_items  — GET /api/v1/grocery-lists/{id}/items.
+//   add_grocery_item    — POST /api/v1/grocery-lists/{id}/items, manual add.
+//   check_grocery_item  — PATCH /api/v1/grocery-items/{id}, tap-to-check.
+//   delete_grocery_item — DELETE /api/v1/grocery-items/{id}.
+//   generate_groceries  — POST /api/v1/grocery-lists/{id}/generate?from=&to=.
+//   list_pantry         — GET /api/v1/pantry.
+//   add_pantry          — POST /api/v1/pantry.
+//   delete_pantry       — DELETE /api/v1/pantry/{id}.
 //
 // The inbox commands were written in Task 1; the surfacing/task commands in
-// Task 3 for the Today view and its task-capture form. All share the same
-// reqwest + serde shape and the two small get_json / post_ok helpers below.
+// Task 3 for the Today view and its task-capture form; the meal/grocery/pantry
+// commands in P2 Slice 4 for the Menu and Groceries views. All share the same
+// reqwest + serde shape and the small get_json / post_ok / post_json / patch_ok
+// / delete_ok helpers below.
 //
 // The service address is hardcoded to http://127.0.0.1:7890 for the prototype;
 // a later task will read it from the Tauri app config or a sidecar-managed port.
@@ -231,6 +245,136 @@ struct AssigneeBody {
     member_id: Option<String>,
 }
 
+// ─── Meal / Grocery / Pantry types ──────────────────────────────────────────
+
+/// One ingredient line, mirroring `IngredientLineResponse` in amity-service.
+///
+/// Used both ways: sent as part of `CreateMealBody` when planning a meal, and
+/// received as part of `Meal` when listing them — the shape is identical on
+/// the wire in both directions, so one struct covers both.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngredientLine {
+    /// The ingredient's name (e.g. "flour"), shown verbatim.
+    pub name: String,
+    /// Freetext quantity; omitted from the body when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qty: Option<String>,
+}
+
+/// A planned meal, mirroring `MealResponse` in amity-service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Meal {
+    pub id: String,
+    /// The meal's calendar date (`YYYY-MM-DD`).
+    pub date: String,
+    /// `"dinner"` | `"breakfast"` | `"lunch"` | `"other"`.
+    pub slot: String,
+    pub name: String,
+    /// UUID of the cook, if assigned; absent when unset.
+    pub cook: Option<String>,
+    pub ingredient_lines: Vec<IngredientLine>,
+    /// Free-form notes; absent when unset.
+    pub notes: Option<String>,
+    pub created_at: String,
+}
+
+/// Request body for `POST /api/v1/meals`; unset fields are omitted from the
+/// JSON.
+#[derive(Debug, Serialize)]
+struct CreateMealBody {
+    name: String,
+    date: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    slot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cook: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ingredient_lines: Option<Vec<IngredientLine>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+}
+
+/// A grocery list, mirroring `GroceryListResponse` in amity-service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroceryList {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+/// Request body for `POST /api/v1/grocery-lists`.
+#[derive(Debug, Serialize)]
+struct CreateGroceryListBody {
+    name: String,
+}
+
+/// One grocery item, mirroring `GroceryItemResponse` in amity-service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroceryItem {
+    pub id: String,
+    pub list_id: String,
+    pub name: String,
+    /// Freetext quantity; absent when unset.
+    pub qty: Option<String>,
+    /// Free-form category, for grouping in the UI; absent when unset.
+    pub category: Option<String>,
+    pub checked: bool,
+    /// `"manual"` or `"from_meal"`.
+    pub source: String,
+    /// UUID of the meal this item was generated from; absent for manual
+    /// items.
+    pub source_meal_id: Option<String>,
+    pub created_at: String,
+}
+
+/// Request body for `POST /api/v1/grocery-lists/{id}/items` — a manual add.
+#[derive(Debug, Serialize)]
+struct CreateGroceryItemBody {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qty: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
+}
+
+/// Request body for `PATCH /api/v1/grocery-items/{id}`.
+#[derive(Debug, Serialize)]
+struct PatchGroceryItemBody {
+    checked: bool,
+}
+
+/// Response envelope for `POST /api/v1/grocery-lists/{id}/generate`, mirroring
+/// `GenerateResponse` in amity-service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerateGroceriesResult {
+    /// The resolved inclusive lower bound of the meal date range used
+    /// (`YYYY-MM-DD`).
+    pub from: String,
+    /// The resolved inclusive upper bound of the meal date range used
+    /// (`YYYY-MM-DD`).
+    pub to: String,
+    /// The newly-added items (may be empty).
+    pub added: Vec<GroceryItem>,
+}
+
+/// A pantry staple, mirroring `PantryItemResponse` in amity-service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PantryItem {
+    pub id: String,
+    pub name: String,
+    /// Free-form note; absent when unset.
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+/// Request body for `POST /api/v1/pantry`.
+#[derive(Debug, Serialize)]
+struct CreatePantryItemBody {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+}
+
 // ─── HTTP helpers ───────────────────────────────────────────────────────────
 
 /// GET `url` and deserialise the JSON body into `T`.
@@ -278,6 +422,111 @@ async fn post_ok<B: Serialize>(url: String, body: &B) -> Result<(), String> {
         return Err(format!("service error {status}: {text}"));
     }
     // Success: the caller only needs to know it worked and will re-fetch.
+    Ok(())
+}
+
+/// POST `body` as JSON to `url`, deserialising the response body into `T`.
+///
+/// Like `post_ok`, but for endpoints that return the created resource (e.g.
+/// `POST /api/v1/meals` returns the created `Meal`) — the frontend can then
+/// display it without a follow-up GET.
+///
+/// # Errors
+///
+/// Returns a message on transport failure, a non-2xx status, or a body that
+/// does not parse as `T`.
+async fn post_json<B: Serialize, T: serde::de::DeserializeOwned>(
+    url: String,
+    body: &B,
+) -> Result<T, String> {
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("failed to reach amity-service: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("service error {status}: {text}"));
+    }
+    response
+        .json::<T>()
+        .await
+        .map_err(|e| format!("failed to parse response: {e}"))
+}
+
+/// POST to `url` with no request body, deserialising the response into `T`.
+///
+/// Used for `POST /api/v1/grocery-lists/{id}/generate`, whose handler reads
+/// its `from`/`to` range from query parameters rather than a JSON body.
+///
+/// # Errors
+///
+/// Returns a message on transport failure, a non-2xx status, or a body that
+/// does not parse as `T`.
+async fn post_no_body<T: serde::de::DeserializeOwned>(url: String) -> Result<T, String> {
+    let response = reqwest::Client::new()
+        .post(url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to reach amity-service: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("service error {status}: {text}"));
+    }
+    response
+        .json::<T>()
+        .await
+        .map_err(|e| format!("failed to parse response: {e}"))
+}
+
+/// PATCH `body` as JSON to `url`, discarding the response body on success.
+///
+/// Mirrors `post_ok` but for PATCH — used for `PATCH /api/v1/grocery-items/{id}`
+/// (tap-to-check), whose handler returns only a small confirmation body the
+/// frontend does not need (it already knows the new state; it re-fetches the
+/// list to refresh).
+///
+/// # Errors
+///
+/// Returns a message on transport failure or a non-2xx status.
+async fn patch_ok<B: Serialize>(url: String, body: &B) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .patch(url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("failed to reach amity-service: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("service error {status}: {text}"));
+    }
+    Ok(())
+}
+
+/// DELETE `url`, discarding the response body on success.
+///
+/// Used for the grocery-item and pantry-item removal commands, whose handlers
+/// return only a small confirmation body the frontend does not need — it
+/// re-fetches the list to refresh.
+///
+/// # Errors
+///
+/// Returns a message on transport failure or a non-2xx status.
+async fn delete_ok(url: String) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .delete(url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to reach amity-service: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("service error {status}: {text}"));
+    }
     Ok(())
 }
 
@@ -393,6 +642,210 @@ async fn change_assignee(id: String, member_id: Option<String>) -> Result<(), St
     .await
 }
 
+// ─── Meal commands ──────────────────────────────────────────────────────────
+
+/// Fetch meals (`GET /api/v1/meals`), optionally within a date range.
+///
+/// Called on mount of the Menu view and on prev/next week navigation. `from`
+/// and `to` (`YYYY-MM-DD`) must both be present or both absent, matching the
+/// service's own pairing rule; the frontend enforces that before calling.
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable.
+#[tauri::command]
+async fn list_meals(from: Option<String>, to: Option<String>) -> Result<Vec<Meal>, String> {
+    let mut url = format!("{SERVICE_BASE_URL}/api/v1/meals");
+    if let (Some(from), Some(to)) = (from, to) {
+        url = format!("{url}?from={from}&to={to}");
+    }
+    get_json(url).await
+}
+
+/// Plan a meal (`POST /api/v1/meals`) from the Menu view's plan-a-meal form.
+///
+/// Returns the created `Meal` so the caller can display it without a
+/// follow-up GET.
+///
+/// # Errors
+///
+/// Returns the service's 422 message for invalid input (e.g. a blank name).
+#[tauri::command]
+async fn create_meal(
+    name: String,
+    date: String,
+    slot: Option<String>,
+    cook: Option<String>,
+    ingredient_lines: Option<Vec<IngredientLine>>,
+    notes: Option<String>,
+) -> Result<Meal, String> {
+    let body = CreateMealBody {
+        name,
+        date,
+        slot,
+        cook,
+        ingredient_lines,
+        notes,
+    };
+    post_json(format!("{SERVICE_BASE_URL}/api/v1/meals"), &body).await
+}
+
+// ─── Grocery commands ───────────────────────────────────────────────────────
+
+/// List every grocery list (`GET /api/v1/grocery-lists`).
+///
+/// Called on mount of the Groceries view to resolve the active list.
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable.
+#[tauri::command]
+async fn list_grocery_lists() -> Result<Vec<GroceryList>, String> {
+    get_json(format!("{SERVICE_BASE_URL}/api/v1/grocery-lists")).await
+}
+
+/// Create a grocery list (`POST /api/v1/grocery-lists`).
+///
+/// Called once, the first time the Groceries view finds no existing list.
+///
+/// # Errors
+///
+/// Returns the service's 422 message for a blank name.
+#[tauri::command]
+async fn create_grocery_list(name: String) -> Result<GroceryList, String> {
+    let body = CreateGroceryListBody { name };
+    post_json(format!("{SERVICE_BASE_URL}/api/v1/grocery-lists"), &body).await
+}
+
+/// List a grocery list's items (`GET /api/v1/grocery-lists/{id}/items`).
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable
+/// or the list id is unknown (404).
+#[tauri::command]
+async fn list_grocery_items(list_id: String) -> Result<Vec<GroceryItem>, String> {
+    get_json(format!(
+        "{SERVICE_BASE_URL}/api/v1/grocery-lists/{list_id}/items"
+    ))
+    .await
+}
+
+/// Manually add a grocery item (`POST /api/v1/grocery-lists/{id}/items`).
+///
+/// Returns the created `GroceryItem` so the caller can display it without a
+/// follow-up GET.
+///
+/// # Errors
+///
+/// Returns the service's 422 message for a blank name.
+#[tauri::command]
+async fn add_grocery_item(
+    list_id: String,
+    name: String,
+    qty: Option<String>,
+    category: Option<String>,
+) -> Result<GroceryItem, String> {
+    let body = CreateGroceryItemBody {
+        name,
+        qty,
+        category,
+    };
+    post_json(
+        format!("{SERVICE_BASE_URL}/api/v1/grocery-lists/{list_id}/items"),
+        &body,
+    )
+    .await
+}
+
+/// Toggle a grocery item's checked state (`PATCH /api/v1/grocery-items/{id}`).
+///
+/// The hub's one free-tap mutation on the Groceries view — tap an item to
+/// check it off. The caller re-fetches the list to refresh.
+///
+/// # Errors
+///
+/// Returns a message on transport failure or a non-2xx status.
+#[tauri::command]
+async fn check_grocery_item(id: String, checked: bool) -> Result<(), String> {
+    let body = PatchGroceryItemBody { checked };
+    patch_ok(
+        format!("{SERVICE_BASE_URL}/api/v1/grocery-items/{id}"),
+        &body,
+    )
+    .await
+}
+
+/// Remove a grocery item (`DELETE /api/v1/grocery-items/{id}`).
+///
+/// # Errors
+///
+/// Returns a message on transport failure or a non-2xx status.
+#[tauri::command]
+async fn delete_grocery_item(id: String) -> Result<(), String> {
+    delete_ok(format!("{SERVICE_BASE_URL}/api/v1/grocery-items/{id}")).await
+}
+
+/// Generate grocery additions from planned meals
+/// (`POST /api/v1/grocery-lists/{id}/generate`).
+///
+/// `from`/`to` (`YYYY-MM-DD`) are optional — absent means the service's own
+/// default (the current Monday-Sunday week). Returns only the newly-added
+/// items; the caller re-fetches the list to see the full picture.
+///
+/// # Errors
+///
+/// Returns a message on transport failure, a non-2xx status, or an unparsable
+/// response.
+#[tauri::command]
+async fn generate_groceries(
+    list_id: String,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<GenerateGroceriesResult, String> {
+    let mut url = format!("{SERVICE_BASE_URL}/api/v1/grocery-lists/{list_id}/generate");
+    if let (Some(from), Some(to)) = (from, to) {
+        url = format!("{url}?from={from}&to={to}");
+    }
+    post_no_body(url).await
+}
+
+// ─── Pantry commands ────────────────────────────────────────────────────────
+
+/// List every pantry staple (`GET /api/v1/pantry`).
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable.
+#[tauri::command]
+async fn list_pantry() -> Result<Vec<PantryItem>, String> {
+    get_json(format!("{SERVICE_BASE_URL}/api/v1/pantry")).await
+}
+
+/// Record a pantry staple (`POST /api/v1/pantry`).
+///
+/// Returns the created `PantryItem` so the caller can display it without a
+/// follow-up GET.
+///
+/// # Errors
+///
+/// Returns the service's 422 message for a blank name.
+#[tauri::command]
+async fn add_pantry(name: String, note: Option<String>) -> Result<PantryItem, String> {
+    let body = CreatePantryItemBody { name, note };
+    post_json(format!("{SERVICE_BASE_URL}/api/v1/pantry"), &body).await
+}
+
+/// Remove a pantry staple (`DELETE /api/v1/pantry/{id}`).
+///
+/// # Errors
+///
+/// Returns a message on transport failure or a non-2xx status.
+#[tauri::command]
+async fn delete_pantry(id: String) -> Result<(), String> {
+    delete_ok(format!("{SERVICE_BASE_URL}/api/v1/pantry/{id}")).await
+}
+
 // ─── Application entry ────────────────────────────────────────────────────────
 
 /// Build and run the Tauri application.
@@ -410,6 +863,18 @@ pub fn run() {
             create_task,
             complete_task,
             change_assignee,
+            list_meals,
+            create_meal,
+            list_grocery_lists,
+            create_grocery_list,
+            list_grocery_items,
+            add_grocery_item,
+            check_grocery_item,
+            delete_grocery_item,
+            generate_groceries,
+            list_pantry,
+            add_pantry,
+            delete_pantry,
         ])
         // Kiosk mode: when AMITY_KIOSK=1 (set by scripts/run-hub.sh), start the
         // window fullscreen for the wall-mounted hub. Default (unset/other) is a
