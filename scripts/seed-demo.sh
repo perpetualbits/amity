@@ -19,6 +19,10 @@ THU=$(date -d "$MON +3 day" +%Y-%m-%d)
 FRI=$(date -d "$MON +4 day" +%Y-%m-%d)
 TODAY=$(date +%Y-%m-%d)
 
+# The placeholder member UUID (migration 0001) — the only household member
+# until real ones exist; the hub's own api.ts exports the same constant.
+PLACEHOLDER_MEMBER="00000000-0000-7000-8000-000000000001"
+
 # POST JSON to an endpoint; extract the "id" field from a JSON response.
 # `--fail` makes an HTTP 4xx/5xx a non-zero exit, so (with `set -e`) a rejected
 # payload aborts loudly instead of the script reporting "done" with fewer items.
@@ -44,6 +48,29 @@ post "events/${RESCHED}/override" "{\"instance_date\":\"${THU}\",\"action\":\"re
 ANNOT=$(post events "{\"title\":\"Parent-teacher meeting\",\"start_at\":\"${FRI}T10:00:00Z\"}" | idof)
 post "events/${ANNOT}/override" "{\"instance_date\":\"${FRI}\",\"action\":\"annotate\",\"payload\":\"Bring last term's report\"}" >/dev/null
 
-echo "done — open the hub; Today and Week should now show the seeded items."
+# Pantry staples — recorded BEFORE the meals below, so grocery generation
+# (either the run below or a later tap of the hub's own button) suppresses
+# the matching ingredient lines ("rice" and "parmesan") from what it adds.
+post pantry '{"name":"rice"}' >/dev/null
+post pantry '{"name":"parmesan"}' >/dev/null
+
+# Planned meals for the week — a cook assigned via the placeholder member
+# (migration 0001; the only member until real household members exist), plus
+# ingredient lines so both Menu and grocery generation have something to show.
+# Monday: Thai green curry, cook assigned.
+post meals "{\"name\":\"Thai green curry\",\"date\":\"${MON}\",\"cook\":\"${PLACEHOLDER_MEMBER}\",\"ingredient_lines\":[{\"name\":\"coconut milk\"},{\"name\":\"green curry paste\"},{\"name\":\"tofu\"},{\"name\":\"rice\"}]}" >/dev/null
+# Wednesday: Pasta, no cook assigned yet.
+post meals "{\"name\":\"Pasta\",\"date\":\"${WED}\",\"ingredient_lines\":[{\"name\":\"pasta\"},{\"name\":\"passata\"},{\"name\":\"parmesan\"}]}" >/dev/null
+
+# A grocery list, generated once from this week's planned meals — "rice" and
+# "parmesan" are suppressed by the pantry staples above; the rest land on the
+# list. The hub's own "Generate from this week's menu" button re-runs this
+# safely (no-clobber — see amity-service's api/grocery.rs module doc).
+LIST=$(post grocery-lists '{"name":"Groceries"}' | idof)
+post "grocery-lists/${LIST}/generate" '{}' >/dev/null
+
+echo "done — open the hub; Today and Week should now show the seeded items,"
+echo "Menu should show Monday's curry and Wednesday's pasta, and Groceries"
+echo "should show the generated list (rice/parmesan suppressed by the pantry)."
 echo "(Note: an external recurring feed with an EXDATE needs a real ICS URL and is"
 echo " not seeded here — the reschedule/annotate/all-day/timed/task cases are.)"

@@ -28,7 +28,7 @@ window.PROJECT_MAP = {
     name: "amity",
     tagline: "a peaceful home — project map",
     repo: "github.com/perpetualbits/amity",
-    updated: "2026-08-20",
+    updated: "2026-08-22",
   },
 
   // ── Status vocabulary ─────────────────────────────────────────────────────
@@ -414,17 +414,42 @@ window.PROJECT_MAP = {
       id: "meals",
       label: "Meals, groceries, pantry",
       layer: "domain",
-      status: "planned",
-      tags: ["MVP", "Phase 2"],
+      status: "active",
+      tags: ["MVP", "Phase 2", "Task 8"],
       desc:
-        "The one place real automation pays for itself: weekly dinner planning " +
-        "(labels by default, recipes optional) feeding a grocery list, plus " +
-        "coarse pantry levels and a use-first list. No calorie tracking, no " +
-        "expiry alerts, no substitution engine. Not started.",
-      files: [],
-      specs: [{ label: "Brief §9 — meals, groceries, pantry", href: "docs/amity_brief.md" }],
-      parts: [],
-      deps: [],
+        "The one place real automation pays for itself. Shipped in P2 (Task 8): " +
+        "weekly dinner planning (a Meal is a label + optional cook + optional " +
+        "ingredient lines — NO recipes), a generate-then-edit grocery pipeline " +
+        "(regeneration never clobbers checked/manual items), and a lightweight " +
+        "pantry that SUPPRESSES staples from generation (no levels/thresholds — " +
+        "deferred as 'structure grows with use'). Menu + Groceries hub views run " +
+        "live; tonight's dinner surfaces on Today. Dietary-flag warnings and the " +
+        "threshold/recipe structure remain planned.",
+      files: [
+        "crates/amity-core/src/meal.rs",
+        "crates/amity-core/src/grocery.rs",
+        "crates/amity-core/src/pantry.rs",
+        "crates/amity-storage/migrations/0005_add_meals.sql",
+        "crates/amity-service/src/api/meal.rs",
+        "crates/amity-service/src/api/grocery.rs",
+        "apps/hub-tauri/src/Menu.tsx",
+        "apps/hub-tauri/src/Groceries.tsx",
+      ],
+      specs: [
+        { label: "Brief §9 — meals, groceries, pantry", href: "docs/amity_brief.md" },
+        { label: "P2 brief — Task 8", href: "docs/prompts/amity_task_p2_meals_brief.md" },
+      ],
+      parts: [
+        { label: "Meal entity + ingredient lines + cook", status: "done", desc: "Meal = date, slot (dinner default), name, optional cook, optional freetext ingredient lines. No recipes." },
+        { label: "Grocery list/item + generation", status: "done", desc: "plan_grocery_additions (pure): meals in range → additions, pantry-suppressed, deduped, no-clobber on re-generate. Endpoint POST /grocery-lists/{id}/generate." },
+        { label: "Pantry (lightweight suppress-list)", status: "done", desc: "Staples the household keeps on hand; generation skips matching lines. No levels/thresholds/depletion (deferred)." },
+        { label: "Storage (migration 0005)", status: "done", desc: "meals + meal_ingredients (ordered) + grocery_lists + grocery_items + pantry_items, STRICT." },
+        { label: "Menu + Groceries hub views", status: "done", desc: "Menu week strip (plan-a-meal), Groceries (tap-to-check, manual add, generate). Run live." },
+        { label: "Tonight's dinner on Today", status: "done", desc: "Dinner Meal surfaces on Today as an informational item (SurfacedKind::Meal); not on Week." },
+        { label: "Dietary-flag warnings", status: "planned", desc: "Safety/preference flags on planned meals (brief §9.3) — deferred past P2." },
+        { label: "Recipes / pantry thresholds / use-first list", status: "planned", desc: "'Structure grows with use' opt-ins (brief §6, §9.5–9.6) — deferred." },
+      ],
+      deps: ["api", "storage", "surfacing"],
     },
     {
       id: "project",
@@ -657,7 +682,7 @@ window.PROJECT_MAP = {
   roadmap: [
     { id: "next-t7", kind: "next", label: "Task 7 · hub at-rest UI + weather (not scoped)", status: "planned" },
     { id: "p1", kind: "phase", label: "P1 · Data model + inbox + Today", status: "active" },
-    { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "planned" },
+    { id: "p2", kind: "phase", label: "P2 · Meals, lists, pantry", status: "done" },
     { id: "p3", kind: "phase", label: "P3 · Calendar + recurrence engine", status: "active" },
     { id: "p4", kind: "phase", label: "P4 · Tasks + CompletionLog + chores", status: "active" },
     { id: "p5", kind: "phase", label: "P5 · Notifications + hub-at-rest + LED", status: "planned" },

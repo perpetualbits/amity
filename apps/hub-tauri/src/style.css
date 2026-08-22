@@ -194,6 +194,11 @@ body {
 
 .viewswitch {
   display: flex;
+  /* Five tabs (Today/Week/Capture/Menu/Groceries) are wider than the original
+   * three; rather than shrinking each tab's touch target to force a single
+   * row, the control wraps onto a second row on a narrow window. Every tab
+   * keeps its full 60px height regardless of window width or tab count. */
+  flex-wrap: wrap;
   gap: 1px;
   /* A hairline frame, not a pill — consistent with the calm register. */
   border: 1px solid #ccc;
@@ -259,6 +264,17 @@ body {
  * cue reinforcing the shape, still never the only one. */
 .today-item.is-event .today-kind {
   color: #4a4840;
+}
+
+/* A meal's marker (🍴) renders in its own colour already; no additional tint
+ * needed the way the monochrome task/event glyphs get one. */
+.today-item.is-meal .today-kind {
+  font-size: 1rem;
+}
+
+.today-cook {
+  /* Plain informational text, matching how overdue is shown — no badge. */
+  color: #555;
 }
 
 .today-main {
@@ -587,4 +603,291 @@ body {
   background: #fff;
   color: #1a1a1a;
   cursor: pointer;
+}
+
+/* ── Menu view ─────────────────────────────────────────────────────────────── */
+
+.menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  /* Same full-bleed treatment as Week — a 7-day strip needs the full window
+   * width, otherwise each day is squeezed (see .week-section's own comment). */
+  width: 100vw;
+  margin-inline: calc(50% - 50vw);
+  padding-inline: 1.5rem;
+  box-sizing: border-box;
+}
+
+.menu-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  background: #e0dfd9;
+  border: 1px solid #e0dfd9;
+}
+
+@media (max-width: 900px) {
+  .menu-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.menu-day {
+  background: #f5f4f0;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* Today's column: marked by fill AND a text badge, not colour alone
+ * (brief §12.4) — mirrors .week-day.is-today. */
+.menu-day.is-today {
+  background: #fff;
+  box-shadow: inset 0 3px 0 #1a1a1a;
+}
+
+.menu-day-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid #e0dfd9;
+}
+
+.menu-day-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.menu-day-date {
+  font-size: 0.85rem;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+
+.menu-day-badge {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #1a1a1a;
+  font-weight: 700;
+}
+
+.menu-dinner-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.menu-dinner {
+  font-size: 0.95rem;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+.menu-dinner-name {
+  font-weight: 700;
+}
+
+.menu-dinner-cook {
+  color: #555;
+  font-size: 0.85rem;
+}
+
+.menu-plan-toggle {
+  font-family: inherit;
+  font-size: 0.85rem;
+  /* 60px minimum touch target (brief §12.4), even inside a grid cell. */
+  min-height: 60px;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px dashed #ccc;
+  border-radius: 0;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+}
+
+.planmeal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border: 1px solid #ccc;
+  background: #fff;
+}
+
+.planmeal-cook {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #555;
+  /* The checkbox itself is small, but the whole label row is a comfortable
+   * tap target, matching the hub's touch-first convention. */
+  min-height: 44px;
+}
+
+.planmeal-cook input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+}
+
+.planmeal-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.planmeal-submit {
+  min-width: auto;
+  padding: 0 1rem;
+  font-size: 0.95rem;
+}
+
+/* ── Groceries view ────────────────────────────────────────────────────────── */
+
+.groceries-toolbar {
+  margin-bottom: 1rem;
+}
+
+.groceries-generate {
+  font-family: inherit;
+  font-size: 1rem;
+  /* 60px minimum touch target (brief §12.4). */
+  min-height: 60px;
+  padding: 0 1.25rem;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  background: #1a1a1a;
+  color: #f5f4f0;
+  cursor: pointer;
+}
+
+.groceries-generate:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.grocery-group {
+  margin-bottom: 1rem;
+}
+
+.grocery-group-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #888;
+  font-weight: 700;
+  padding: 0.5rem 0 0.25rem;
+}
+
+.grocery-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.grocery-item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  border-bottom: 1px solid #e0dfd9;
+}
+
+.grocery-item-tap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  /* 60px minimum touch target (brief §12.4) — the whole row is tappable. */
+  min-height: 60px;
+  padding: 0.5rem 0;
+  font-family: inherit;
+  font-size: 1rem;
+  text-align: left;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.grocery-item-mark {
+  flex-shrink: 0;
+  font-size: 1.1rem;
+  color: #8a8880;
+}
+
+.grocery-item-name {
+  flex: 1;
+}
+
+.grocery-item-qty {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+/* A checked item is marked by the ☑ glyph (already distinct); the muted
+ * strikethrough is a secondary reinforcing cue, never the only one
+ * (brief §12.4). */
+.grocery-item.is-checked .grocery-item-name,
+.grocery-item.is-checked .grocery-item-qty {
+  color: #999;
+  text-decoration: line-through;
+}
+
+.grocery-item-delete {
+  flex-shrink: 0;
+  /* 60×60px minimum touch target (brief §12.4). */
+  min-width: 60px;
+  min-height: 60px;
+  font-family: inherit;
+  font-size: 1.1rem;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+}
+
+.grocery-item-delete:disabled,
+.grocery-item-tap:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.groceryadd-section {
+  margin-top: 1rem;
+}
+
+.itemadd-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid #ccc;
+  background: #fff;
+}
+
+.itemadd-qty {
+  max-width: 12rem;
+}
+
+.itemadd-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.itemadd-submit {
+  min-width: auto;
+  padding: 0 1.5rem;
+  font-size: 1.05rem;
 }

@@ -5,6 +5,12 @@
  * is a designed state (brief §3, §11.5). Each item offers the two affordances
  * the hub needs: mark it done, and reassign it (scaffolding until real members).
  *
+ * A `kind: "meal"` item (P2 Slice 3's third surfaced kind, dinner only) is
+ * purely informational: a distinct fork-and-knife marker, the dish name, and
+ * whether a cook is assigned — no Done, no Reassign. It has no lifecycle to
+ * settle (see amity-service's build_meal_candidates doc comment), so it is
+ * quiet exactly like an event, just with its own glyph.
+ *
  * An "Add a task" toggle reveals a structured capture form. Recurrence is chosen
  * from a small set of presets rather than exposing raw RRULE, matching the
  * ratified Task 3 plan.
@@ -84,6 +90,16 @@ export default function Today() {
    * An event simply occurs: it is not "whose turn", so it offers no actions. */
   const isTask = (item: SurfacedItem) => item.kind === "task";
 
+  /** True for a meal — informational only, like an event, but with its own
+   * marker and no lifecycle actions. */
+  const isMeal = (item: SurfacedItem) => item.kind === "meal";
+
+  /** The kind marker glyph: an open ring for a task, a filled diamond for an
+   * event, a fork-and-knife for a meal. A shape (not colour alone) carries
+   * the distinction (brief §12.4); the aria-label on the span names the kind
+   * so it is not conveyed by glyph alone. */
+  const kindGlyph = (item: SurfacedItem) => (isTask(item) ? "○" : isMeal(item) ? "🍴" : "◆");
+
   /** The time label for an item: an all-day event reads "all day" (its instant
    * is midnight, which would otherwise show as 00:00); everything else shows
    * its salient time. */
@@ -107,13 +123,20 @@ export default function Today() {
             <ol class="today-list">
               <For each={items()}>
                 {(item) => (
-                  <li class="today-item" classList={{ "is-event": !isTask(item) }}>
+                  <li
+                    class="today-item"
+                    classList={{ "is-event": item.kind === "event", "is-meal": isMeal(item) }}
+                  >
                     {/* Kind marker: a shape, not colour alone (brief §12.4). A
                         task shows an open ring (it can be checked off); an event
-                        shows a filled diamond (it simply occurs). The aria-label
+                        shows a filled diamond (it simply occurs); a meal shows a
+                        fork and knife (also purely informational). The aria-label
                         names the kind so it is not conveyed by glyph alone. */}
-                    <span class="today-kind" aria-label={isTask(item) ? "task" : "event"}>
-                      {isTask(item) ? "○" : "◆"}
+                    <span
+                      class="today-kind"
+                      aria-label={isTask(item) ? "task" : isMeal(item) ? "meal" : "event"}
+                    >
+                      {kindGlyph(item)}
                     </span>
                     <div class="today-main">
                       <span class="today-title">{item.title}</span>
@@ -126,10 +149,17 @@ export default function Today() {
                         <Show when={item.overdue}>
                           <span class="today-overdue"> · due earlier</span>
                         </Show>
+                        {/* The meal's cook, when one is assigned — informational
+                            only, no name resolution yet (there is no member
+                            registry to look one up in). */}
+                        <Show when={isMeal(item) && item.current_assignee_id}>
+                          <span class="today-cook"> · cook assigned</span>
+                        </Show>
                       </span>
                     </div>
-                    {/* Only tasks carry actions. An event has no "done" — it is
-                        not whose turn, it just happens — so its row is quiet. */}
+                    {/* Only tasks carry actions. An event or meal has no "done"
+                        — it is not whose turn, it just happens — so its row is
+                        quiet. */}
                     <Show when={isTask(item)}>
                       <div class="today-actions">
                         <button

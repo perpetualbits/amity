@@ -64,6 +64,25 @@ pub mod event_instance;
 /// Insert an overlay, and list a day's overlays for the surfacing layer to apply.
 pub mod event_override;
 
+/// Repository functions for [`amity_core::grocery::GroceryList`] and
+/// [`amity_core::grocery::GroceryItem`].
+///
+/// Exposes insert/list/fetch for lists, and insert (single + batch)/list/
+/// check-toggle/delete for items. P2 Slice 2.
+pub mod grocery;
+
+/// Repository functions for [`amity_core::meal::Meal`].
+///
+/// Exposes insert, fetch, list (all + date-ranged), and delete. Ingredient
+/// lines are stored in a child table (`meal_ingredients`) and reassembled in
+/// `Vec` order via an explicit `position` column. P2 Slice 2.
+pub mod meal;
+
+/// Repository functions for [`amity_core::pantry::PantryItem`].
+///
+/// Exposes insert, list, and delete. P2 Slice 2.
+pub mod pantry;
+
 // Re-export the error type at the crate root so callers only need one import.
 pub use error::StorageError;
 
