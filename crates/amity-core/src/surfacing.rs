@@ -42,9 +42,9 @@ use crate::task::Priority;
 
 /// The entity type a surfaced item came from.
 ///
-/// `Task` and `Event` are live today; the remaining surfacable types named in
-/// brief §6.4 — Project milestones, Thread prompts — join here later without a
-/// change to the wire shape.
+/// `Task`, `Event`, and `Meal` are live today; the remaining surfacable types
+/// named in brief §6.4 — Project milestones, Thread prompts — join here later
+/// without a change to the wire shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SurfacedKind {
@@ -52,6 +52,11 @@ pub enum SurfacedKind {
     Task,
     /// A calendar Event (native, or a read-only external one).
     Event,
+    /// A planned dinner Meal (P2 Slice 3) — surfaced on Today only, as a
+    /// non-actionable informational item (no done/reassign affordance yet;
+    /// that lands with the hub's meal-planning UI). Week does not surface
+    /// meals — see `api/surfacing.rs::build_meal_candidates`'s doc comment.
+    Meal,
 }
 
 // ─── Liveness ───────────────────────────────────────────────────────────────
@@ -582,11 +587,19 @@ pub fn plan_week(
 /// Ordering rank for the "events before tasks" layout rule — lower sorts first.
 ///
 /// Only used by `plan_week`'s bucket sort; `rank_today` interleaves the two
-/// kinds purely by time instead, so this has no equivalent there.
+/// kinds purely by time instead (ordering there is driven entirely by the
+/// `all_day` flag, salient time, and priority — see `rank_today`'s sort), so
+/// this has no equivalent there. `Meal` is ranked here only for the match to
+/// stay exhaustive: `build_meal_candidates` (api/surfacing.rs) is wired into
+/// Today alone, so a Meal candidate never actually reaches `plan_week` today.
+/// It is placed alongside `Event` (both informational, non-actionable
+/// context) so that if Week ever does grow a meal candidate, it leads tasks
+/// by default without a further decision being needed here.
 fn kind_rank(kind: SurfacedKind) -> u8 {
     match kind {
-        // Events lead a day's timed items, ahead of any task.
-        SurfacedKind::Event => 0,
+        // Events (and, if ever surfaced here, Meals) lead a day's timed
+        // items, ahead of any task.
+        SurfacedKind::Event | SurfacedKind::Meal => 0,
         SurfacedKind::Task => 1,
     }
 }

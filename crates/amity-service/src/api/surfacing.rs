@@ -29,6 +29,11 @@
 // remaining seam. Overdue items carry a flag the frontend renders as plain
 // information — never a lateness count (brief §3, §11).
 //
+// P2 Slice 3 adds a THIRD kind, Meal, but only to Today: `build_meal_candidates`
+// turns a dinner-slot planned meal into one all-day, non-actionable candidate
+// (see its own doc comment). `week`'s candidate assembly is deliberately left
+// untouched — a planned meal never appears on the Week grid in this slice.
+//
 // Error handling matches api/task.rs:
 //   HTTP 400 Bad Request     — the `date`/`start` query parameter is not YYYY-MM-DD.
 //   HTTP 500 Internal Error  — an unexpected storage failure (logged, not leaked).
@@ -57,10 +62,14 @@ use amity_core::surfacing::{
 };
 // `Task` is what we assemble candidates from; `TaskStatus` maps onto `Liveness`.
 use amity_core::task::{Task, TaskStatus};
-// Storage: tasks and their instances; events, their instances, and overrides.
+// `MealSlot` filters Today's meal candidates down to the dinner slot.
+use amity_core::meal::MealSlot;
+// Storage: tasks and their instances; events, their instances, and overrides;
+// meals for the Today-only meal candidate.
 use amity_storage::event::list_events;
 use amity_storage::event_instance::list_upcoming_event_instances;
 use amity_storage::event_override::list_overrides_on_date;
+use amity_storage::meal::list_meals_in_range;
 use amity_storage::task::{TaskFilter, list_tasks};
 use amity_storage::task_instance::list_upcoming_instances;
 // Event override action/type (to detect cancellations and apply the rest) and
@@ -223,12 +232,15 @@ pub async fn today(
         }
     };
 
-    // Turn tasks and events into one mixed-type candidate set. Both kinds flow
-    // through the same ranking rule; events simply carry Event-kind timing. The
-    // two builders are independent, so the order they are appended does not
-    // matter — the rule re-sorts the whole set.
+    // Turn tasks, events, and meals into one mixed-type candidate set. All
+    // three kinds flow through the same ranking rule; events and meals simply
+    // carry different timing/all_day shapes. The three builders are
+    // independent, so the order they are appended does not matter — the rule
+    // re-sorts the whole set. Meals are Today-only — `week` (below) never
+    // calls `build_meal_candidates` (see that function's doc comment).
     let mut candidates = build_task_candidates(&state, &tasks, target_date).await;
     candidates.extend(build_event_candidates(&state, target_date).await);
+    candidates.extend(build_meal_candidates(&state, target_date).await);
 
     // Rank the whole mixed set at once. No member filter yet — the whole
     // household's day surfaces; per-person filtering arrives with members.
@@ -679,6 +691,70 @@ fn event_candidate(
     }
 }
 
+/// Build Today's Meal candidates for `target_date` (P2 Slice 3).
+///
+/// Only `today` calls this — `week` is deliberately untouched, per the P2
+/// Slice 3 brief, so a planned meal never appears on the Week grid. A
+/// dinner-slot `Meal` planned for the day becomes exactly ONE informational,
+/// non-actionable `SurfaceCandidate`: `all_day: true` (meals carry no clock
+/// time, so they lead the day like an all-day event — see `rank_today`'s
+/// sort), anchored at local midnight so the existing `Scheduled` timing rule
+/// places it on its own day with no new rule needed, and `cook` mapped
+/// straight onto `current_assignee_id` (the same responsible-person field
+/// tasks and events already use). Breakfast/lunch/other-slot meals do not
+/// surface here — the brief scopes Today's meal surfacing to dinner, the
+/// slot households overwhelmingly plan ahead of time (see
+/// `amity_core::meal::MealSlot`'s doc comment).
+///
+/// A storage read failure degrades to an empty meal contribution, matching
+/// `build_event_candidates`'s own graceful degradation — a meals outage
+/// should not blank out the rest of the day.
+async fn build_meal_candidates(state: &AppState, target_date: Date) -> Vec<SurfaceCandidate> {
+    // A single-day range: `from == to == target_date`. Reuses the grocery
+    // generator's own storage query rather than a bespoke one-day fetch.
+    let meals = match list_meals_in_range(&state.db, target_date, target_date).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to list meals for surfacing");
+            return Vec::new();
+        }
+    };
+
+    // Local midnight on the meal's own date — no meal carries a clock time,
+    // so this is the anchor `Timing::Scheduled` needs to place it on exactly
+    // `target_date` and nowhere else.
+    let anchor = target_date.midnight().assume_utc();
+
+    meals
+        .into_iter()
+        // Today's meal surfacing is scoped to the dinner slot (see the doc
+        // comment above).
+        .filter(|m| m.slot == MealSlot::Dinner)
+        .map(|meal| SurfaceCandidate {
+            // The third surfacable kind (P2 Slice 3's addition to the seam).
+            kind: SurfacedKind::Meal,
+            // The meal's own id, for client navigation.
+            source_id: meal.id.to_string(),
+            // Title shown verbatim in the Today view.
+            title: meal.name,
+            // Meals have no lifecycle to settle (no Done/Skipped) — always
+            // live, so only the temporal rule decides whether it surfaces.
+            liveness: Liveness::Live,
+            // Fixed occurrence on the meal's own date; never overdue.
+            timing: Timing::Scheduled(anchor),
+            // No clock time — leads the day like a banner event.
+            all_day: true,
+            // Meals carry no soft-priority ranking.
+            priority: None,
+            // Reuse the existing responsible-person field for the cook.
+            current_assignee_id: meal.cook,
+            // No override machinery for meals in this slice.
+            annotation: None,
+            rescheduled: false,
+        })
+        .collect()
+}
+
 // ─── Response mapping and helpers ───────────────────────────────────────────
 
 /// Project a ranked `SurfacedItem` into its JSON response shape.
@@ -713,6 +789,8 @@ fn kind_to_str(kind: SurfacedKind) -> &'static str {
         SurfacedKind::Task => "task",
         // Calendar event (Project/Thread join here later).
         SurfacedKind::Event => "event",
+        // A planned dinner meal, surfaced on Today only (P2 Slice 3).
+        SurfacedKind::Meal => "meal",
     }
 }
 

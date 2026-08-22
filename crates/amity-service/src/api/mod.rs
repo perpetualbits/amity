@@ -26,9 +26,28 @@
 //   PATCH /api/v1/calendars/{id}         — enable/disable a subscription
 //   DELETE /api/v1/calendars/{id}        — unsubscribe (cascades its events)
 //   POST  /api/v1/calendars/{id}/refresh — sync one feed on demand
+//   POST  /api/v1/meals                             — plan a new meal
+//   GET   /api/v1/meals                             — list meals (?from=&to=)
+//   GET   /api/v1/meals/{id}                        — fetch a meal
+//   DELETE /api/v1/meals/{id}                       — remove a meal
+//   POST  /api/v1/grocery-lists                     — create a grocery list
+//   GET   /api/v1/grocery-lists                     — list grocery lists
+//   GET   /api/v1/grocery-lists/{id}                — fetch a grocery list
+//   POST  /api/v1/grocery-lists/{id}/items          — add an item manually
+//   GET   /api/v1/grocery-lists/{id}/items          — list a list's items
+//   POST  /api/v1/grocery-lists/{id}/generate       — generate additions from
+//                                                      planned meals
+//   PATCH /api/v1/grocery-items/{id}                — toggle checked
+//   DELETE /api/v1/grocery-items/{id}               — remove an item
+//   POST  /api/v1/pantry                            — record a new staple
+//   GET   /api/v1/pantry                            — list pantry staples
+//   DELETE /api/v1/pantry/{id}                      — remove a staple
 
 pub mod calendar;
 pub mod event;
+pub mod grocery;
 pub mod inbox;
+pub mod meal;
+pub mod pantry;
 pub mod surfacing;
 pub mod task;
