@@ -1,6 +1,6 @@
 # Amity — Project Status Report
 
-*Living handoff document. Last updated 2026-08-22 (Task 8 / P2 Meals-Lists-Pantry done; **next: Task 7 · at-rest UI**).*
+*Living handoff document. Last updated 2026-08-24 (Task 9 Members + clear-checked done; **next: Task 7 · at-rest UI**).*
 *Update this file whenever a task lands (it is the source of truth Claude.ai reads to prepare the next prompt).*
 
 ## Working model (henceforth)
@@ -60,16 +60,25 @@ deferred task fields · `0004` external calendar ingestion.
 | **6** | Event **overrides** in surfacing + **Week view backend** | done |
 | **6b** | Unblock the hub, run it live, ship the **Week UI** | done — **hub runs live** |
 | **8 / P2** | **Meals, Lists & Pantry** (+ grocery generation, meal on Today) | done |
+| **9** | **Member registry** (names/picker) + grocery **clear-checked** | done |
 
-**Task 8 / P2 detail** (most recent): `Meal` (date, slot, name, optional cook,
-optional freetext ingredient lines — **no recipes**), `GroceryList`/`GroceryItem`,
-and a **lightweight `PantryItem`** (staples that *suppress* generation — no
-levels/thresholds); a pure `plan_grocery_additions` with a proven **no-clobber**
-regenerate property; migration 0005; CRUD APIs + a `POST /grocery-lists/{id}/generate`
-endpoint; **Menu** + **Groceries** hub views (run live, maintainer-accepted); and
-tonight's dinner surfacing on **Today** as an informational `SurfacedKind::Meal`
-(not on Week). Known limitation: **cook displays as an id/"cook assigned", not a
-name** — no member-name registry yet (the `people` entity is still a placeholder).
+**Task 9 detail** (most recent): a minimal **Member** registry — `{display_name,
+initial?, color?}` and NOTHING else; accounts/auth/roles/presence/activity/age are
+a **standing refused boundary** (the entity is kept too small to host
+surveillance). Migration 0006 (ALTERs the migration-0001 stub; the legacy
+placeholder row is kept for FK integrity but **filtered out of the member list**);
+CRUD API (management is API-only). The hub now **resolves cook/assignee to real
+names** (+ a color dot), with a **member picker** (+ "no one") in the meal form and
+the task-reassign flow; unresolved ids show "—". Plus a grocery **"clear checked"**
+action (two-tap confirm) that lets a bought staple be re-added on the next
+generate. This closes the P2 "cook shows as an id" limitation.
+
+**Task 8 / P2 detail:** `Meal` (date, slot, name, optional cook, optional freetext
+ingredient lines — **no recipes**), `GroceryList`/`GroceryItem`, a **lightweight
+`PantryItem`** (staples that *suppress* generation — no levels/thresholds); a pure
+`plan_grocery_additions` with a proven **no-clobber** regenerate; migration 0005;
+CRUD + `POST /grocery-lists/{id}/generate`; **Menu** + **Groceries** hub views; and
+tonight's dinner on **Today** (`SurfacedKind::Meal`, not on Week).
 
 **Task 6 detail** (most recent): **Slice 1** — `Reschedule` and `Annotate`
 overrides now apply in surfacing (only `Cancel` did before), on the shared
@@ -104,15 +113,20 @@ the egress guards were then added (mutation-verified to bite).
 
 ## Repository health (as of this update)
 
-- **Task 8 / P2 on branch `task-p2-meals`** (5 slices: entities, storage,
-  service, hub, housekeeping), merging after final review; `main` was at `a08aff5`
-  (Task 6b).
+- **Task 9 on branch `task-9-members`** (4 slices: Member end-to-end, hub names +
+  picker, clear-checked, housekeeping), merging after final review; `main` is at
+  `6a92d75` (P2 + the demo-reset script).
 - **Workspace tests all green**; **`cargo fmt` clean; `clippy -W clippy::pedantic`
   0 warnings; comment-density gate 0 failures.** The hub (`apps/hub-tauri`,
   outside the workspace) builds clean (`cargo build` + `npm run build`) and runs
-  live; it has no automated tests beyond `vite build`.
-- Migrations `0001`–`0005`; a live `project-map.js` at repo root tracks status
+  live. It has **no type-check in CI** (`vite build` is esbuild transpile-only) —
+  run `tsc --noEmit` manually when touching hub TS (see the note below).
+- Migrations `0001`–`0006`; a live `project-map.js` at repo root tracks status
   (keep it in sync on changes).
+- **Hub tooling gap:** the hub has no `typescript` dependency, so nothing
+  type-checks it automatically. For a real check, `cd apps/hub-tauri && npm install
+  --no-save typescript && node_modules/.bin/tsc --noEmit`. Worth adding `typescript`
+  as a dev-dependency + a `typecheck` script in a future hub-touching task.
 
 ## Engineering guardrails (Claude Code operates under these — bake into prompts)
 
@@ -190,15 +204,15 @@ by the maintainer.
 
 ## Next task: Task 7 · hub at-rest UI + weather
 
-P2 is done, so the roadmap "next" marker is **Task 7 — the hub-at-rest UI**
-(clock / weather / ambient), which now has real content to design around (Today,
-Week, and tonight's menu). This is where the maintainer's **aesthetic direction**
-applies: *calm but not bland*, ambient, reflecting household activity (work,
-study, building, sports) — **not busy, not in-your-face** (see the
-`hub-aesthetic-direction` memory; load the `frontend-design` skill when scoping
-it). A natural companion is a **member-name registry** — the `people` entity is
-still a placeholder, so cook/assignee currently render as ids, not names; wiring
-real member names lets Menu/Today show "Alice cooks tonight."
+The roadmap "next" marker is **Task 7 — the hub-at-rest UI** (clock / weather /
+ambient), which now has real content to design around (Today, Week, tonight's
+menu, and — via Task 9 — real member names, e.g. "Alice cooks tonight"). This is
+where the maintainer's **aesthetic direction** applies: *calm but not bland*,
+ambient, reflecting household activity (work, study, building, sports) — **not
+busy, not in-your-face** (see the `hub-aesthetic-direction` memory; load the
+`frontend-design` skill when scoping it). Weather implies a second **outbound
+egress** (after ICS) — apply the same posture as ADR-0004 (allow-list, timeout,
+size cap; no household data sent).
 
 Other unblocked candidates if Task 7 waits: P5 · Notifications; the deferred
 "structure grows with use" meal features (recipes, pantry thresholds, use-first

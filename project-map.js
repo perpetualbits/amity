@@ -28,7 +28,7 @@ window.PROJECT_MAP = {
     name: "amity",
     tagline: "a peaceful home — project map",
     repo: "github.com/perpetualbits/amity",
-    updated: "2026-08-22",
+    updated: "2026-08-24",
   },
 
   // ── Status vocabulary ─────────────────────────────────────────────────────
@@ -74,13 +74,14 @@ window.PROJECT_MAP = {
       status: "active",
       tags: ["Tauri", "Solid", "Phase 1", "Task 3"],
       desc:
-        "The kitchen hub — a Tauri 2 shell with a Solid frontend. Three views sit " +
+        "The kitchen hub — a Tauri 2 shell with a Solid frontend. Five views sit " +
         "behind a segmented control: Capture (the inbox), Today (the ranked " +
-        "surface, with mark-done / reassign and inline task capture), and Week (a " +
-        "read-only 7-day grid). As of Task 6b the hub BUILDS and RUNS LIVE on the " +
-        "dev machine (WebKit2GTK installed; `scripts/run-hub.sh` launches it). The " +
-        "hub-at-rest design (clock, weather, ambient LED) is still to come, so the " +
-        "surface as a whole stays in progress.",
+        "surface with mark-done / reassign + inline task capture), Week (a " +
+        "read-only 7-day grid), Menu (the week's dinners + cook), and Groceries " +
+        "(tap-to-check, generate, clear-checked). As of Task 6b the hub BUILDS and " +
+        "RUNS LIVE (`scripts/run-hub.sh`); Task 9 resolves cook/assignee to real " +
+        "member names via a picker. The hub-at-rest design (clock, weather, " +
+        "ambient LED) is still to come, so the surface as a whole stays in progress.",
       files: [
         "apps/hub-tauri/src/App.tsx",
         "apps/hub-tauri/src/Today.tsx",
@@ -97,8 +98,9 @@ window.PROJECT_MAP = {
         { label: "Inbox capture form", status: "done", desc: "Text input + submit; clears on success, no toast." },
         { label: "Recent-items list", status: "done", desc: "Refreshes on mount and after each capture; designed empty state." },
         { label: "Capture / Today switch", status: "done", desc: "A two-item segmented control; no router." },
-        { label: "Today view", status: "done", desc: "Renders /surfacing/today as a mixed task+event list with a per-item kind marker (○ task / ◆ event); events show \"all day\" and carry no actions. Mark-done, reassign, and a calm empty state (type-checked, not yet run live)." },
-        { label: "Task capture form", status: "done", desc: "Title, notes, due, tags, and a recurrence preset that builds the RRULE (not yet run live)." },
+        { label: "Today view", status: "done", desc: "Runs live: a mixed task+event+meal list with per-item kind markers; tasks carry mark-done + a member-picker reassign; meals/events are informational; cook/assignee show real member names (+ color dot); calm empty state." },
+        { label: "Task capture form", status: "done", desc: "Title, notes, due, tags, and a recurrence preset that builds the RRULE." },
+        { label: "Menu + Groceries views", status: "done", desc: "P2: Menu week strip (plan-a-meal, cook via member picker); Groceries (tap-to-check, generate from this week's menu, clear-checked with a two-tap confirm)." },
         { label: "Week view (UI)", status: "done", desc: "The SolidJS Week grid (Task 6b): 7-column landscape (stacks under 900px), today marked, event/all-day/rescheduled/annotation markers, prev/next/this-week nav, read-only. The hub now builds and runs live — the earlier E0255 was a local issue (a pub #[tauri::command] colocated with generate_handler!), fixed by dropping pub + adding icons, NOT an upstream/rustc bug." },
         { label: "Hub-at-rest (clock / weather / LED)", status: "planned", desc: "The calm screensaver baseline from brief §11.5–11.6." },
       ],
@@ -343,25 +345,36 @@ window.PROJECT_MAP = {
       id: "people",
       label: "People & presence",
       layer: "domain",
-      status: "seam",
-      tags: ["placeholder"],
+      status: "active",
+      tags: ["Task 9"],
       desc:
-        "Every task and inbox item references a member — but only one member " +
-        "exists: a single hard-coded placeholder (00000000-…-0001) inserted at " +
-        "migration time. The MemberId type is real; member management, two-tier " +
-        "governance, and the Presence concept are all deferred to later tasks.",
-      files: ["crates/amity-core/src/ids.rs", "crates/amity-storage/migrations/0001_initial.sql"],
+        "A minimal Member registry shipped in Task 9: display name + optional " +
+        "initial + optional color, and NOTHING else — accounts, auth, roles, " +
+        "presence, activity, age, and any per-member behavioral data are a " +
+        "standing refused boundary (the entity is kept too small to host " +
+        "surveillance). Cook/assignee now resolve to real names in the hub via a " +
+        "member picker. The legacy migration-0001 placeholder row is kept for FK " +
+        "integrity but filtered out of the member list. Governance tiers and the " +
+        "Presence concept remain deferred.",
+      files: [
+        "crates/amity-core/src/member.rs",
+        "crates/amity-storage/migrations/0006_add_members.sql",
+        "crates/amity-service/src/api/member.rs",
+        "apps/hub-tauri/src/MemberPicker.tsx",
+      ],
       specs: [
+        { label: "Task 9 brief — Members & small seams", href: "docs/prompts/amity_task_09_members_brief.md" },
         { label: "Brief §6.5 — Presence", href: "docs/amity_brief.md" },
         { label: "Brief §14.3 — two-tier governance", href: "docs/amity_brief.md" },
       ],
       parts: [
-        { label: "MemberId newtype", status: "done", desc: "Typed UUID; usable now even without the Member entity." },
-        { label: "Placeholder member", status: "seam", desc: "One hard-coded UUID backs every FK so the prototype runs." },
-        { label: "Member management & governance", status: "planned", desc: "Creation, switching, PIN/NFC, admin/member tiers." },
+        { label: "MemberId newtype", status: "done", desc: "Typed UUID; usable everywhere a person is referenced." },
+        { label: "Member registry (name / initial / color)", status: "done", desc: "Display-only entity + migration 0006 + CRUD API; the refused-list boundary is documented at every layer." },
+        { label: "Names + member picker in the hub", status: "done", desc: "Cook/assignee resolve to names (+ color dot); meal-form and task-reassign use a picker over members + 'no one'. Management is API-only." },
+        { label: "Member management UI & governance", status: "planned", desc: "A settings surface, switching, PIN/NFC, admin/member tiers." },
         { label: "Presence", status: "planned", desc: "Home/away/with-other-parent windows that affect scheduling." },
       ],
-      deps: [],
+      deps: ["storage", "api"],
     },
     {
       id: "event",
@@ -441,7 +454,7 @@ window.PROJECT_MAP = {
       ],
       parts: [
         { label: "Meal entity + ingredient lines + cook", status: "done", desc: "Meal = date, slot (dinner default), name, optional cook, optional freetext ingredient lines. No recipes." },
-        { label: "Grocery list/item + generation", status: "done", desc: "plan_grocery_additions (pure): meals in range → additions, pantry-suppressed, deduped, no-clobber on re-generate. Endpoint POST /grocery-lists/{id}/generate." },
+        { label: "Grocery list/item + generation", status: "done", desc: "plan_grocery_additions (pure): meals in range → additions, pantry-suppressed, deduped, no-clobber on re-generate. Endpoints POST /grocery-lists/{id}/generate and /clear-checked (Task 9 — bulk-remove bought items so a staple can be re-added next cycle)." },
         { label: "Pantry (lightweight suppress-list)", status: "done", desc: "Staples the household keeps on hand; generation skips matching lines. No levels/thresholds/depletion (deferred)." },
         { label: "Storage (migration 0005)", status: "done", desc: "meals + meal_ingredients (ordered) + grocery_lists + grocery_items + pantry_items, STRICT." },
         { label: "Menu + Groceries hub views", status: "done", desc: "Menu week strip (plan-a-meal), Groceries (tap-to-check, manual add, generate). Run live." },
