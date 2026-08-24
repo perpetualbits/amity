@@ -15,7 +15,9 @@
  */
 
 import { createSignal, onMount, For, Show } from "solid-js";
-import { createMeal, listMeals, PLACEHOLDER_MEMBER, type IngredientLine, type Meal } from "./api";
+import { createMeal, listMeals, type IngredientLine, type Meal } from "./api";
+import { ensureMembersLoaded, members, memberById, memberName } from "./members";
+import MemberPicker from "./MemberPicker";
 
 export default function Menu() {
   // The Monday (YYYY-MM-DD) of the week currently displayed.
@@ -47,8 +49,12 @@ export default function Menu() {
     }
   }
 
-  // Load "this week" once when the view mounts.
-  onMount(() => load(weekStart()));
+  // Load "this week" once when the view mounts, alongside the shared member
+  // roster (idempotent — a no-op if another view already triggered it).
+  onMount(() => {
+    load(weekStart());
+    ensureMembersLoaded();
+  });
 
   /** Step to the previous or next week. */
   function shiftWeek(days: number) {
@@ -156,14 +162,29 @@ export default function Menu() {
                   >
                     <ul class="menu-dinner-list">
                       <For each={dinners()}>
-                        {(meal) => (
-                          <li class="menu-dinner">
-                            <span class="menu-dinner-name">{meal.name}</span>
-                            <Show when={meal.cook}>
-                              <span class="menu-dinner-cook"> · cook assigned</span>
-                            </Show>
-                          </li>
-                        )}
+                        {(meal) => {
+                          // Resolve the cook once per row; a dangling id
+                          // (no matching member) falls back to "—", never
+                          // an error (Task 9 Slice 2 design decision).
+                          const cook = () => memberById(members(), meal.cook);
+                          return (
+                            <li class="menu-dinner">
+                              <span class="menu-dinner-name">{meal.name}</span>
+                              <Show when={meal.cook}>
+                                <span class="menu-dinner-cook">
+                                  {" · "}
+                                  <Show when={cook()?.color}>
+                                    <span
+                                      class={`member-dot member-dot-${cook()?.color}`}
+                                      aria-hidden="true"
+                                    />
+                                  </Show>
+                                  {memberName(members(), meal.cook)}
+                                </span>
+                              </Show>
+                            </li>
+                          );
+                        }}
                       </For>
                     </ul>
                   </Show>
@@ -189,7 +210,8 @@ function PlanMealForm(props: {
   onError: (msg: string) => void;
 }) {
   const [name, setName] = createSignal("");
-  const [cookAssigned, setCookAssigned] = createSignal(false);
+  // The chosen cook's member id, or null for "no one".
+  const [cook, setCook] = createSignal<string | null>(null);
   // Freetext, comma-separated ingredient lines, e.g. "tofu, rice, curry paste (2 tbsp)".
   const [ingredients, setIngredients] = createSignal("");
 
@@ -203,7 +225,7 @@ function PlanMealForm(props: {
       await createMeal({
         name: dishName,
         date: props.date,
-        cook: cookAssigned() ? PLACEHOLDER_MEMBER : undefined,
+        cook: cook() ?? undefined,
         ingredientLines: lines.length > 0 ? lines : undefined,
       });
       await props.onCreated();
@@ -225,14 +247,10 @@ function PlanMealForm(props: {
         autocomplete="off"
         required
       />
-      <label class="planmeal-cook">
-        <input
-          type="checkbox"
-          checked={cookAssigned()}
-          onChange={(e) => setCookAssigned(e.currentTarget.checked)}
-        />
-        <span>assign a cook</span>
-      </label>
+      <div class="planmeal-cook-field">
+        <span class="planmeal-cook-label">Cook</span>
+        <MemberPicker members={members()} selected={cook()} onSelect={setCook} disabled={props.busy} />
+      </div>
       <input
         class="capture-input"
         type="text"

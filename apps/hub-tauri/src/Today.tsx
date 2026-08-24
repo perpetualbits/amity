@@ -3,7 +3,8 @@
  * Renders the ranked "what's on today" list from the surfacing endpoint. When
  * nothing is due it shows a calm "nothing today" and means it — the empty state
  * is a designed state (brief §3, §11.5). Each item offers the two affordances
- * the hub needs: mark it done, and reassign it (scaffolding until real members).
+ * the hub needs: mark it done, and reassign it via an inline member picker
+ * (Task 9 Slice 2 — see MemberPicker.tsx).
  *
  * A `kind: "meal"` item (P2 Slice 3's third surfaced kind, dinner only) is
  * purely informational: a distinct fork-and-knife marker, the dish name, and
@@ -23,9 +24,10 @@ import {
   changeAssignee,
   createTask,
   formatWhen,
-  PLACEHOLDER_MEMBER,
   type SurfacedItem,
 } from "./api";
+import { ensureMembersLoaded, members, memberById, memberName } from "./members";
+import MemberPicker from "./MemberPicker";
 
 export default function Today() {
   // The surfaced items for the day.
@@ -40,6 +42,8 @@ export default function Today() {
   const [busy, setBusy] = createSignal(false);
   // Whether the add-a-task form is open.
   const [formOpen, setFormOpen] = createSignal(false);
+  // The source_id of the item whose reassign picker is open; null when none is.
+  const [reassigning, setReassigning] = createSignal<string | null>(null);
 
   /** Load (or reload) the Today view from the service. */
   async function load() {
@@ -69,12 +73,13 @@ export default function Today() {
     }
   }
 
-  /** Reassign an item. With one member this is scaffolding — it re-affirms the
-   * placeholder assignee — but the call is real end-to-end. */
-  async function reassign(item: SurfacedItem) {
+  /** Set an item's assignee to `memberId` (null clears it, the picker's "no
+   * one" choice), then close the picker and reload. */
+  async function doReassign(item: SurfacedItem, memberId: string | null) {
     setBusy(true);
     try {
-      await changeAssignee(item.source_id, PLACEHOLDER_MEMBER);
+      await changeAssignee(item.source_id, memberId);
+      setReassigning(null);
       await load();
     } catch (err) {
       setError(typeof err === "string" ? err : "could not reassign");
@@ -83,8 +88,17 @@ export default function Today() {
     }
   }
 
-  // Load once when the view mounts.
-  onMount(load);
+  /** Toggle the inline reassign picker for an item. */
+  function toggleReassign(item: SurfacedItem) {
+    setReassigning((current) => (current === item.source_id ? null : item.source_id));
+  }
+
+  // Load once when the view mounts, alongside the shared member roster
+  // (idempotent — a no-op if another view already triggered it).
+  onMount(() => {
+    load();
+    ensureMembersLoaded();
+  });
 
   /** True for a task — the only kind that carries the done / reassign actions.
    * An event simply occurs: it is not "whose turn", so it offers no actions. */
@@ -125,60 +139,96 @@ export default function Today() {
                 {(item) => (
                   <li
                     class="today-item"
-                    classList={{ "is-event": item.kind === "event", "is-meal": isMeal(item) }}
+                    classList={{
+                      "is-event": item.kind === "event",
+                      "is-meal": isMeal(item),
+                      "is-reassigning": reassigning() === item.source_id,
+                    }}
                   >
-                    {/* Kind marker: a shape, not colour alone (brief §12.4). A
-                        task shows an open ring (it can be checked off); an event
-                        shows a filled diamond (it simply occurs); a meal shows a
-                        fork and knife (also purely informational). The aria-label
-                        names the kind so it is not conveyed by glyph alone. */}
-                    <span
-                      class="today-kind"
-                      aria-label={isTask(item) ? "task" : isMeal(item) ? "meal" : "event"}
-                    >
-                      {kindGlyph(item)}
-                    </span>
-                    <div class="today-main">
-                      <span class="today-title">{item.title}</span>
-                      <span class="today-meta">
-                        <time class="item-time" dateTime={item.at}>
-                          {whenLabel(item)}
-                        </time>
-                        {/* Overdue is shown as information, never a red badge
-                            or a count of how late it is (brief §3, §11). */}
-                        <Show when={item.overdue}>
-                          <span class="today-overdue"> · due earlier</span>
-                        </Show>
-                        {/* The meal's cook, when one is assigned — informational
-                            only, no name resolution yet (there is no member
-                            registry to look one up in). */}
-                        <Show when={isMeal(item) && item.current_assignee_id}>
-                          <span class="today-cook"> · cook assigned</span>
-                        </Show>
+                    <div class="today-item-row">
+                      {/* Kind marker: a shape, not colour alone (brief §12.4). A
+                          task shows an open ring (it can be checked off); an event
+                          shows a filled diamond (it simply occurs); a meal shows a
+                          fork and knife (also purely informational). The aria-label
+                          names the kind so it is not conveyed by glyph alone. */}
+                      <span
+                        class="today-kind"
+                        aria-label={isTask(item) ? "task" : isMeal(item) ? "meal" : "event"}
+                      >
+                        {kindGlyph(item)}
                       </span>
+                      <div class="today-main">
+                        <span class="today-title">{item.title}</span>
+                        <span class="today-meta">
+                          <time class="item-time" dateTime={item.at}>
+                            {whenLabel(item)}
+                          </time>
+                          {/* Overdue is shown as information, never a red badge
+                              or a count of how late it is (brief §3, §11). */}
+                          <Show when={item.overdue}>
+                            <span class="today-overdue"> · due earlier</span>
+                          </Show>
+                          {/* The meal's cook, when one is assigned — resolved to
+                              a name client-side (Task 9 Slice 2); a dangling id
+                              falls back to "—", never an error. */}
+                          <Show when={isMeal(item) && item.current_assignee_id}>
+                            <span class="today-cook">
+                              {" · "}
+                              <Show when={memberById(members(), item.current_assignee_id)?.color}>
+                                <span
+                                  class={`member-dot member-dot-${memberById(members(), item.current_assignee_id)?.color}`}
+                                  aria-hidden="true"
+                                />
+                              </Show>
+                              {memberName(members(), item.current_assignee_id)}
+                            </span>
+                          </Show>
+                        </span>
+                      </div>
+                      {/* Only tasks carry actions. An event or meal has no "done"
+                          — it is not whose turn, it just happens — so its row is
+                          quiet. */}
+                      <Show when={isTask(item)}>
+                        <div class="today-actions">
+                          <button
+                            class="today-done"
+                            type="button"
+                            disabled={busy()}
+                            aria-label={`Mark "${item.title}" done`}
+                            onClick={() => markDone(item)}
+                          >
+                            Done
+                          </button>
+                          <button
+                            class="today-reassign"
+                            type="button"
+                            disabled={busy()}
+                            aria-label={`Reassign "${item.title}"`}
+                            aria-expanded={reassigning() === item.source_id}
+                            onClick={() => toggleReassign(item)}
+                          >
+                            Reassign
+                          </button>
+                        </div>
+                      </Show>
                     </div>
-                    {/* Only tasks carry actions. An event or meal has no "done"
-                        — it is not whose turn, it just happens — so its row is
-                        quiet. */}
-                    <Show when={isTask(item)}>
-                      <div class="today-actions">
+                    {/* The inline picker for reassigning a task — members plus
+                        a "no one" choice (Task 9 Slice 2). */}
+                    <Show when={isTask(item) && reassigning() === item.source_id}>
+                      <div class="today-reassign-picker">
+                        <MemberPicker
+                          members={members()}
+                          selected={item.current_assignee_id ?? null}
+                          onSelect={(memberId) => doReassign(item, memberId)}
+                          disabled={busy()}
+                        />
                         <button
-                          class="today-done"
+                          class="taskform-cancel"
                           type="button"
                           disabled={busy()}
-                          aria-label={`Mark "${item.title}" done`}
-                          onClick={() => markDone(item)}
+                          onClick={() => setReassigning(null)}
                         >
-                          Done
-                        </button>
-                        <button
-                          class="today-reassign"
-                          type="button"
-                          disabled={busy()}
-                          aria-label={`Reassign "${item.title}"`}
-                          onClick={() => reassign(item)}
-                        >
-                          Reassign
+                          Cancel
                         </button>
                       </div>
                     </Show>

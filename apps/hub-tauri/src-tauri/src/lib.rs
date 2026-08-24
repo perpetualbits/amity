@@ -23,10 +23,13 @@
 //   list_pantry         — GET /api/v1/pantry.
 //   add_pantry          — POST /api/v1/pantry.
 //   delete_pantry       — DELETE /api/v1/pantry/{id}.
+//   list_members         — GET /api/v1/members, the member registry the
+//                           frontend resolves ids against.
 //
 // The inbox commands were written in Task 1; the surfacing/task commands in
 // Task 3 for the Today view and its task-capture form; the meal/grocery/pantry
-// commands in P2 Slice 4 for the Menu and Groceries views. All share the same
+// commands in P2 Slice 4 for the Menu and Groceries views; list_members in
+// Task 9 Slice 2 for client-side member name resolution. All share the same
 // reqwest + serde shape and the small get_json / post_ok / post_json / patch_ok
 // / delete_ok helpers below.
 //
@@ -373,6 +376,28 @@ struct CreatePantryItemBody {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+}
+
+// ─── Member types ───────────────────────────────────────────────────────────
+
+/// A household member, mirroring `MemberResponse` in amity-service.
+///
+/// The frontend fetches the whole roster once and resolves person ids (task
+/// assignees, meal cooks) against it locally — see api.ts's shared members
+/// store. A dangling id (no matching row, e.g. old seed data) is rendered as
+/// "—" by the frontend, never treated as an error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Member {
+    pub id: String,
+    pub display_name: String,
+    /// Optional short label; absent when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial: Option<String>,
+    /// Optional accent colour (`snake_case` string, e.g. `"sage"`); absent
+    /// when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    pub created_at: String,
 }
 
 // ─── HTTP helpers ───────────────────────────────────────────────────────────
@@ -846,6 +871,30 @@ async fn delete_pantry(id: String) -> Result<(), String> {
     delete_ok(format!("{SERVICE_BASE_URL}/api/v1/pantry/{id}")).await
 }
 
+// ─── Member commands ────────────────────────────────────────────────────────
+
+/// List every registered member (`GET /api/v1/members`).
+///
+/// Called once by the frontend's shared members resource (see api.ts /
+/// members.ts); the hub resolves person ids (task assignees, meal cooks)
+/// against this list locally rather than the service inlining names.
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable.
+#[tauri::command]
+async fn list_members() -> Result<Vec<Member>, String> {
+    // The service wraps the list in a `{ "members": [...] }` envelope
+    // (matching list_calendars_handler); unwrap it here so the frontend gets
+    // a bare array, like list_pantry.
+    #[derive(Deserialize)]
+    struct MembersEnvelope {
+        members: Vec<Member>,
+    }
+    let envelope: MembersEnvelope = get_json(format!("{SERVICE_BASE_URL}/api/v1/members")).await?;
+    Ok(envelope.members)
+}
+
 // ─── Application entry ────────────────────────────────────────────────────────
 
 /// Build and run the Tauri application.
@@ -875,6 +924,7 @@ pub fn run() {
             list_pantry,
             add_pantry,
             delete_pantry,
+            list_members,
         ])
         // Kiosk mode: when AMITY_KIOSK=1 (set by scripts/run-hub.sh), start the
         // window fullscreen for the wall-mounted hub. Default (unset/other) is a
