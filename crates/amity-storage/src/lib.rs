@@ -78,6 +78,11 @@ pub mod grocery;
 /// `Vec` order via an explicit `position` column. P2 Slice 2.
 pub mod meal;
 
+/// Repository functions for [`amity_core::member::Member`].
+///
+/// Exposes insert, list, fetch, and delete. Task 9 Slice 1.
+pub mod member;
+
 /// Repository functions for [`amity_core::pantry::PantryItem`].
 ///
 /// Exposes insert, list, and delete. P2 Slice 2.

@@ -96,6 +96,13 @@ pub mod grocery;
 /// date, with freetext ingredient lines. No recipes or cook-assignment logic.
 pub mod meal;
 
+/// `Member`, `MemberBuilder`, `MemberColor`, `MemberError`.
+///
+/// Task 9 Slice 1: a household member as a display-registry entry only —
+/// name, optional initial, optional colour. No accounts, roles, activity, or
+/// age/child-specific structure. See the module doc for the full boundary.
+pub mod member;
+
 /// `PantryItem`, `PantryItemBuilder`, `PantryError`.
 ///
 /// P2 Slice 1 (meals, lists & pantry): a lightweight staples-memory used to

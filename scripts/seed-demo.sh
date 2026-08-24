@@ -19,10 +19,6 @@ THU=$(date -d "$MON +3 day" +%Y-%m-%d)
 FRI=$(date -d "$MON +4 day" +%Y-%m-%d)
 TODAY=$(date +%Y-%m-%d)
 
-# The placeholder member UUID (migration 0001) — the only household member
-# until real ones exist; the hub's own api.ts exports the same constant.
-PLACEHOLDER_MEMBER="00000000-0000-7000-8000-000000000001"
-
 # POST JSON to an endpoint; extract the "id" field from a JSON response.
 # `--fail` makes an HTTP 4xx/5xx a non-zero exit, so (with `set -e`) a rejected
 # payload aborts loudly instead of the script reporting "done" with fewer items.
@@ -30,6 +26,14 @@ post() { curl -fsS -X POST "$BASE/$1" -H 'content-type: application/json' -d "$2
 idof() { python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])'; }
 
 echo "seeding demo data for the week of $MON ..."
+
+# Household members (Task 9 Slice 1) — a small display registry so cooks and
+# assignees can resolve to a real name/initial/colour in the hub instead of
+# the placeholder UUID. Capture Alice's id below to wire into the curry meal.
+ALICE=$(post members '{"display_name":"Alice","initial":"A","color":"sage"}' | idof)
+post members '{"display_name":"Ben","initial":"B","color":"clay"}' >/dev/null
+post members '{"display_name":"Cleo","initial":"C","color":"ochre"}' >/dev/null
+post members '{"display_name":"Dan","initial":"D","color":"teal"}' >/dev/null
 
 # Dated tasks — surface on their due day (Today and Week).
 post tasks "{\"title\":\"Water the plants\",\"due_by\":\"${TODAY}T18:00:00Z\",\"effort\":1}" >/dev/null
@@ -54,11 +58,11 @@ post "events/${ANNOT}/override" "{\"instance_date\":\"${FRI}\",\"action\":\"anno
 post pantry '{"name":"rice"}' >/dev/null
 post pantry '{"name":"parmesan"}' >/dev/null
 
-# Planned meals for the week — a cook assigned via the placeholder member
-# (migration 0001; the only member until real household members exist), plus
-# ingredient lines so both Menu and grocery generation have something to show.
-# Monday: Thai green curry, cook assigned.
-post meals "{\"name\":\"Thai green curry\",\"date\":\"${MON}\",\"cook\":\"${PLACEHOLDER_MEMBER}\",\"ingredient_lines\":[{\"name\":\"coconut milk\"},{\"name\":\"green curry paste\"},{\"name\":\"tofu\"},{\"name\":\"rice\"}]}" >/dev/null
+# Planned meals for the week, with ingredient lines so both Menu and grocery
+# generation have something to show.
+# Monday: Thai green curry, cook assigned to Alice (a real member registered
+# above — Slice 1 of Task 9 — rather than the old hardcoded placeholder UUID).
+post meals "{\"name\":\"Thai green curry\",\"date\":\"${MON}\",\"cook\":\"${ALICE}\",\"ingredient_lines\":[{\"name\":\"coconut milk\"},{\"name\":\"green curry paste\"},{\"name\":\"tofu\"},{\"name\":\"rice\"}]}" >/dev/null
 # Wednesday: Pasta, no cook assigned yet.
 post meals "{\"name\":\"Pasta\",\"date\":\"${WED}\",\"ingredient_lines\":[{\"name\":\"pasta\"},{\"name\":\"passata\"},{\"name\":\"parmesan\"}]}" >/dev/null
 
