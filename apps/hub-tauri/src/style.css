@@ -289,7 +289,8 @@ body {
   font-size: 1rem;
 }
 
-.today-cook {
+.today-cook,
+.today-assignee {
   /* Plain informational text, matching how overdue is shown — no badge. */
   color: #555;
 }

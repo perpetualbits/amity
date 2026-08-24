@@ -16,7 +16,7 @@
 
 import { createSignal, onMount, For, Show } from "solid-js";
 import { createMeal, listMeals, type IngredientLine, type Meal } from "./api";
-import { ensureMembersLoaded, members, memberById, memberName } from "./members";
+import { ensureMembersLoaded, members, memberById } from "./members";
 import MemberPicker from "./MemberPicker";
 
 export default function Menu() {
@@ -179,7 +179,7 @@ export default function Menu() {
                                       aria-hidden="true"
                                     />
                                   </Show>
-                                  {memberName(members(), meal.cook)}
+                                  {cook()?.display_name ?? "—"}
                                 </span>
                               </Show>
                             </li>

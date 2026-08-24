@@ -183,6 +183,22 @@ export default function Today() {
                               {memberName(members(), item.current_assignee_id)}
                             </span>
                           </Show>
+                          {/* A task's current assignee, when one is set — same
+                              client-side resolution as the meal cook above, so
+                              the always-visible row reflects a reassign right
+                              away rather than only the picker's own state. */}
+                          <Show when={isTask(item) && item.current_assignee_id}>
+                            <span class="today-assignee">
+                              {" · "}
+                              <Show when={memberById(members(), item.current_assignee_id)?.color}>
+                                <span
+                                  class={`member-dot member-dot-${memberById(members(), item.current_assignee_id)?.color}`}
+                                  aria-hidden="true"
+                                />
+                              </Show>
+                              {memberName(members(), item.current_assignee_id)}
+                            </span>
+                          </Show>
                         </span>
                       </div>
                       {/* Only tasks carry actions. An event or meal has no "done"
