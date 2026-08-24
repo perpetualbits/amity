@@ -3,9 +3,11 @@
 // The storage layer's interface for the household's display registry. It
 // exposes:
 //   • insert_member — write a new member
-//   • list_members  — read all members (no filter — the roster is small)
-//   • fetch_member  — read one member by id
-//   • delete_member — remove a member by id
+//   • list_members  — read all REAL members (excludes the migration-0001
+//                      placeholder sentinel — see PLACEHOLDER_MEMBER_ID below)
+//   • fetch_member  — read one member by id (unfiltered — including the
+//                      sentinel, so a direct lookup by that id still works)
+//   • delete_member — remove a member by id (also unfiltered)
 //
 // No business logic lives here; `amity_core::member::Member` and its builder
 // own every invariant (non-empty display_name, colour parsing). This module's
@@ -20,6 +22,13 @@
 //     Meal.cook_id, …) may reference no row here — that is expected, and this
 //     module does nothing special for it; a dangling id simply yields `None`
 //     from `fetch_member`.
+//   • The migration-0001 stub row (see PLACEHOLDER_MEMBER_ID) is deliberately
+//     excluded from `list_members` ONLY. It stays in the table untouched —
+//     it is still FK'd from `inbox_items.captured_by` and others — but a
+//     roster UI (Slice 2's member picker) must never show it as a selectable
+//     "member"; it was backfilled by migration 0006 with a placeholder
+//     display_name purely to satisfy the new NOT NULL column, not because it
+//     represents a real household member.
 
 // `SqlitePool` is the shared pool injected into every query function.
 use sqlx::SqlitePool;
@@ -97,7 +106,12 @@ pub async fn insert_member(pool: &SqlitePool, member: &Member) -> Result<(), Sto
     Ok(())
 }
 
-/// List all members, in no particular guaranteed order beyond insertion.
+/// List all REAL members, in no particular guaranteed order beyond insertion.
+///
+/// Excludes the migration-0001 placeholder sentinel (`PLACEHOLDER_MEMBER_ID`)
+/// — it is a legacy FK stub, not a household member, and must never appear in
+/// a member picker. `fetch_member`/`delete_member` remain unfiltered: a
+/// direct lookup or delete by that id should still behave predictably.
 ///
 /// At household scale the member roster is a short, static set of people, so
 /// a full unordered scan is simplest; callers that need a display order sort
@@ -108,7 +122,12 @@ pub async fn insert_member(pool: &SqlitePool, member: &Member) -> Result<(), Sto
 /// Returns `StorageError::Database` on sqlx failure, or `StorageError::Parse`
 /// if a stored row cannot be decoded.
 pub async fn list_members(pool: &SqlitePool) -> Result<Vec<Member>, StorageError> {
-    let rows: Vec<MemberRow> = sqlx::query_as(MEMBER_SELECT).fetch_all(pool).await?;
+    let rows: Vec<MemberRow> = sqlx::query_as(MEMBER_LIST_SELECT)
+        // ?1 excludes the placeholder sentinel; bound (never interpolated)
+        // like every other id filter in this crate.
+        .bind(PLACEHOLDER_MEMBER_ID)
+        .fetch_all(pool)
+        .await?;
 
     // Parse each row; stop at the first error rather than skipping a corrupt row.
     rows.into_iter().map(row_to_member).collect()
@@ -166,11 +185,30 @@ pub async fn delete_member(pool: &SqlitePool, id: MemberId) -> Result<bool, Stor
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
+/// The migration-0001 stub member row's fixed id.
+///
+/// Migration 0001 inserted this row as a minimal FK-satisfying placeholder
+/// before the real Member entity existed (see that migration's doc and
+/// migration 0006, which backfilled it rather than deleting it — its id is
+/// still referenced by `inbox_items.captured_by`, `tasks.owner_id`, and
+/// others). It is not a household member, so `list_members` excludes it; a
+/// direct `fetch_member`/`delete_member` by this id is intentionally left
+/// unfiltered.
+const PLACEHOLDER_MEMBER_ID: &str = "00000000-0000-7000-8000-000000000001";
+
 /// Column list + FROM for the `members` table. Single source of truth for the
 /// select shape; `fetch_member` appends `WHERE id = ?1` via `format!` (never
 /// `concat!`, which needs a compile-time literal), so the column list is
 /// never duplicated.
 const MEMBER_SELECT: &str = "SELECT id, display_name, initial, color, created_at FROM members";
+
+/// `list_members`' own select: the same column list, filtered to exclude the
+/// placeholder sentinel. Kept as a separate const (rather than composing over
+/// `MEMBER_SELECT` with `format!`) because `fetch_member`'s `format!` pattern
+/// exists to append a *parameterised* id, whereas this WHERE clause is fixed
+/// and always present — a plain `concat!`-able literal is clearer here.
+const MEMBER_LIST_SELECT: &str =
+    "SELECT id, display_name, initial, color, created_at FROM members WHERE id != ?1";
 
 /// Convert a raw database row into a `Member`.
 ///

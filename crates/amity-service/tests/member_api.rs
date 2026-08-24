@@ -8,6 +8,9 @@
 //   • Validation: a blank display_name is a 422.
 //   • A malformed id is a 400 on GET.
 //   • An unknown (but well-formed) id is a 404 on GET.
+//   • GET /api/v1/members never includes the migration-0001 placeholder
+//     sentinel (it would otherwise appear as a fake, selectable "Unnamed
+//     member" cook/assignee in Slice 2's member picker).
 //
 // Note: migration 0001 seeds one placeholder member row, so list assertions
 // check membership/presence rather than exact array length (see
@@ -88,6 +91,13 @@ async fn create_list_get_delete_round_trip() {
     let listed = body_json(list).await;
     let members = listed["members"].as_array().expect("members array");
     assert!(members.iter().any(|m| m["id"] == id));
+    // The legacy placeholder must never appear in the listed roster.
+    assert!(
+        members
+            .iter()
+            .all(|m| m["id"] != "00000000-0000-7000-8000-000000000001"),
+        "placeholder sentinel must be excluded from GET /api/v1/members"
+    );
 
     let fetched = get(app.clone(), &format!("/api/v1/members/{id}")).await;
     assert_eq!(fetched.status(), StatusCode::OK);
@@ -99,6 +109,40 @@ async fn create_list_get_delete_round_trip() {
 
     let after = get(app, &format!("/api/v1/members/{id}")).await;
     assert_eq!(after.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn list_members_excludes_placeholder_but_includes_real_members() {
+    // Focused regression test for the sentinel-leak fix (see the module doc):
+    // a real member must be listed; the migration-0001 placeholder must not.
+    let app = build_test_app().await;
+    let create = post_json(
+        app.clone(),
+        "/api/v1/members",
+        json!({ "display_name": "Eve" }),
+    )
+    .await;
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let id = body_json(create).await["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+
+    let list = get(app, "/api/v1/members").await;
+    let members = body_json(list).await["members"]
+        .as_array()
+        .expect("members array")
+        .clone();
+    assert!(
+        members.iter().any(|m| m["id"] == id),
+        "real member must be present"
+    );
+    assert!(
+        members
+            .iter()
+            .all(|m| m["id"] != "00000000-0000-7000-8000-000000000001"),
+        "placeholder sentinel must be absent"
+    );
 }
 
 #[tokio::test]

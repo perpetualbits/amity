@@ -177,9 +177,16 @@ impl MemberBuilder {
         self
     }
 
-    /// Supply a specific id (used by the storage layer to reconstruct a row
-    /// with its existing id). Production callers creating a brand-new member
-    /// should not call this — `build()` mints a fresh id when absent.
+    /// Supply a specific id rather than letting `build()` mint a fresh one.
+    ///
+    /// Kept for API symmetry with sibling builders (e.g. `PantryItemBuilder`)
+    /// and for callers — tests, or a future reconstruction path — that want a
+    /// builder-validated `Member` with a caller-chosen id. The storage layer's
+    /// own row-read path (`amity_storage::member::row_to_member`) does not
+    /// use this method: it constructs `Member` directly via a struct literal,
+    /// since the invariants already held at insert time need no re-validation
+    /// on read. Production callers creating a brand-new member should not
+    /// call this either — `build()` mints a fresh id when absent.
     #[must_use]
     pub fn id(mut self, id: MemberId) -> Self {
         self.id = Some(id);
