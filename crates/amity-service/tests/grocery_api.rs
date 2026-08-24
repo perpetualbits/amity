@@ -407,6 +407,155 @@ async fn generate_no_clobber_end_to_end() {
 }
 
 #[tokio::test]
+async fn clear_checked_then_regenerate_readds_item() {
+    // Slice 3's motivating interaction: a checked (bought) item still sitting
+    // on the list blocks its own re-addition. "Clear checked" lets the
+    // household reset the list; after clearing, a checked-off line is no
+    // longer present, so a later generation can legitimately re-add it — but
+    // a pantry staple stays suppressed throughout, since that suppression
+    // never depended on what was on the list.
+    let app = build_test_app().await;
+    let list_id = create_list(app.clone(), "Groceries").await;
+
+    // A pantry staple that must stay suppressed across the whole scenario.
+    let pantry = post_json(app.clone(), "/api/v1/pantry", json!({ "name": "flour" })).await;
+    assert_eq!(pantry.status(), StatusCode::CREATED);
+
+    // One meal: two ingredients that should reach the list, one that never
+    // should (the pantry staple).
+    let meal = post_json(
+        app.clone(),
+        "/api/v1/meals",
+        json!({
+            "name": "Pancakes",
+            "date": "2099-08-11",
+            "ingredient_lines": [
+                { "name": "eggs" },
+                { "name": "chives" },
+                { "name": "flour" }
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(meal.status(), StatusCode::CREATED);
+
+    let range = "from=2099-08-09&to=2099-08-13";
+
+    // First generation: eggs and chives are added; flour is suppressed.
+    let first = post_json(
+        app.clone(),
+        &format!("/api/v1/grocery-lists/{list_id}/generate?{range}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_added = body_json(first).await["added"]
+        .as_array()
+        .expect("added array")
+        .len();
+    assert_eq!(first_added, 2, "flour must be suppressed by the pantry");
+
+    // Check "eggs" off (bought).
+    let items = body_json(
+        get(
+            app.clone(),
+            &format!("/api/v1/grocery-lists/{list_id}/items"),
+        )
+        .await,
+    )
+    .await;
+    let items = items.as_array().expect("array");
+    let eggs_id = items
+        .iter()
+        .find(|i| i["name"] == "eggs")
+        .expect("eggs item present")["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let checked = patch_json(
+        app.clone(),
+        &format!("/api/v1/grocery-items/{eggs_id}"),
+        json!({ "checked": true }),
+    )
+    .await;
+    assert_eq!(checked.status(), StatusCode::OK);
+
+    // Clear checked items: only eggs is checked, so exactly one is removed.
+    let cleared = post_json(
+        app.clone(),
+        &format!("/api/v1/grocery-lists/{list_id}/clear-checked"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(cleared.status(), StatusCode::OK);
+    assert_eq!(body_json(cleared).await["removed"], 1);
+
+    // eggs is gone; chives (unchecked) remains.
+    let after_clear = body_json(
+        get(
+            app.clone(),
+            &format!("/api/v1/grocery-lists/{list_id}/items"),
+        )
+        .await,
+    )
+    .await;
+    let after_clear = after_clear.as_array().expect("array");
+    assert_eq!(after_clear.len(), 1, "only the checked item is removed");
+    assert_eq!(after_clear[0]["name"], "chives");
+    assert_eq!(after_clear[0]["checked"], false);
+
+    // Generate again over the same range: eggs is no longer present, so it
+    // is legitimately re-added; chives is already there so no duplicate;
+    // flour is still suppressed by the pantry.
+    let second = post_json(
+        app.clone(),
+        &format!("/api/v1/grocery-lists/{list_id}/generate?{range}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_added = body_json(second).await;
+    let second_added = second_added["added"].as_array().expect("added array");
+    assert_eq!(second_added.len(), 1, "only eggs is re-added");
+    assert_eq!(second_added[0]["name"], "eggs");
+
+    let final_items =
+        body_json(get(app, &format!("/api/v1/grocery-lists/{list_id}/items")).await).await;
+    let final_items = final_items.as_array().expect("array");
+    assert_eq!(final_items.len(), 2, "eggs re-added, chives still there");
+    assert!(final_items.iter().any(|i| i["name"] == "eggs"));
+    assert!(final_items.iter().any(|i| i["name"] == "chives"));
+    assert!(
+        !final_items.iter().any(|i| i["name"] == "flour"),
+        "flour stays suppressed by the pantry"
+    );
+}
+
+#[tokio::test]
+async fn clear_checked_missing_list_is_404() {
+    let app = build_test_app().await;
+    let resp = post_json(
+        app,
+        "/api/v1/grocery-lists/018f1a2b-0000-7000-8000-000000000099/clear-checked",
+        json!({}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn clear_checked_bad_list_id_is_400() {
+    let app = build_test_app().await;
+    let resp = post_json(
+        app,
+        "/api/v1/grocery-lists/not-a-uuid/clear-checked",
+        json!({}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn generate_missing_list_is_404() {
     let app = build_test_app().await;
     let resp = post_json(

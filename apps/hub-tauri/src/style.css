@@ -240,11 +240,28 @@ body {
 
 .today-item {
   display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #e0dfd9;
+}
+
+/* The item's always-visible row (kind marker, title/meta, actions). Split
+ * out from .today-item so the inline reassign picker (below) can sit as its
+ * own full-width block under this row rather than fighting the row's flex
+ * layout. */
+.today-item-row {
+  display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid #e0dfd9;
+}
+
+.today-reassign-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
 }
 
 .today-kind {
@@ -272,7 +289,8 @@ body {
   font-size: 1rem;
 }
 
-.today-cook {
+.today-cook,
+.today-assignee {
   /* Plain informational text, matching how overdue is shown — no badge. */
   color: #555;
 }
@@ -722,20 +740,15 @@ body {
   background: #fff;
 }
 
-.planmeal-cook {
+.planmeal-cook-field {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-  color: #555;
-  /* The checkbox itself is small, but the whole label row is a comfortable
-   * tap target, matching the hub's touch-first convention. */
-  min-height: 44px;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
-.planmeal-cook input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
+.planmeal-cook-label {
+  font-size: 0.85rem;
+  color: #555;
 }
 
 .planmeal-actions {
@@ -754,6 +767,10 @@ body {
 
 .groceries-toolbar {
   margin-bottom: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 .groceries-generate {
@@ -770,6 +787,75 @@ body {
 }
 
 .groceries-generate:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* "Clear checked" — armed state (first tap). Distinct from Generate so it
+ * never reads as the primary action; the destructive step is gated behind
+ * the inline confirm below rather than a blocking native dialog. */
+.groceries-clear {
+  font-family: inherit;
+  font-size: 1rem;
+  /* 60px minimum touch target (brief §12.4). */
+  min-height: 60px;
+  padding: 0 1.25rem;
+  border: 1px solid #c99;
+  border-radius: 0;
+  background: #fff;
+  color: #a33;
+  cursor: pointer;
+}
+
+.groceries-clear:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Second-tap confirm affordance — replaces the "Clear checked" button in
+ * place (no native confirm()/dialog: that blocks the Tauri webview). */
+.groceries-clear-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #c99;
+  background: #fff4f4;
+  padding: 0.25rem;
+}
+
+.groceries-clear-prompt {
+  font-size: 0.95rem;
+  color: #a33;
+  padding: 0 0.5rem;
+}
+
+.groceries-clear-confirm-yes,
+.groceries-clear-confirm-no {
+  font-family: inherit;
+  font-size: 1rem;
+  /* 60px minimum touch target (brief §12.4). */
+  min-height: 60px;
+  min-width: 60px;
+  padding: 0 1rem;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.groceries-clear-confirm-yes {
+  background: #a33;
+  color: #fff;
+  border-color: #a33;
+}
+
+.groceries-clear-confirm-no {
+  background: #fff;
+  color: #555;
+}
+
+.groceries-clear-confirm-yes:disabled,
+.groceries-clear-confirm-no:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -890,4 +976,83 @@ body {
   min-width: auto;
   padding: 0 1.5rem;
   font-size: 1.05rem;
+}
+
+/* ── Members ───────────────────────────────────────────────────────────────── */
+/* Colour dot + member picker, shared by Menu's plan-a-meal form and Today's
+ * reassign action (Task 9 Slice 2). */
+
+/* A small accent-colour swatch, rendered next to a resolved member's name
+ * where it aids scanning. Square, not round — matching the hub's flat,
+ * no-rounded-corner register (brief §3) rather than reading as a pill/avatar.
+ * Purely decorative (aria-hidden): colour is never the only carrier of who a
+ * name refers to, the name text is always present alongside it (brief §12.4). */
+.member-dot {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+}
+
+.member-dot-sage {
+  background: #8a9a7b;
+}
+
+.member-dot-clay {
+  background: #b5715f;
+}
+
+.member-dot-ochre {
+  background: #c98f2f;
+}
+
+.member-dot-slate {
+  background: #6b7d8c;
+}
+
+.member-dot-plum {
+  background: #8b6f94;
+}
+
+.member-dot-teal {
+  background: #4f8f89;
+}
+
+/* A compact, touch-first row of options: the registered members plus a
+ * "no one" choice. Wraps on a narrow window rather than shrinking targets
+ * below the 60px minimum (brief §12.4). */
+.memberpicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.memberpicker-option {
+  font-family: inherit;
+  font-size: 0.9rem;
+  /* 60px minimum touch target (brief §12.4). */
+  min-height: 60px;
+  min-width: 60px;
+  padding: 0 1rem;
+  display: flex;
+  align-items: center;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  background: #fff;
+  color: #1a1a1a;
+  cursor: pointer;
+}
+
+/* The selected option is carried by fill AND weight, not colour alone
+ * (brief §12.4) — mirrors .seg.active. */
+.memberpicker-option.is-selected {
+  background: #1a1a1a;
+  color: #f5f4f0;
+  font-weight: 700;
+}
+
+.memberpicker-option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

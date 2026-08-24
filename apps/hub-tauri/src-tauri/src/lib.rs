@@ -20,13 +20,18 @@
 //   check_grocery_item  — PATCH /api/v1/grocery-items/{id}, tap-to-check.
 //   delete_grocery_item — DELETE /api/v1/grocery-items/{id}.
 //   generate_groceries  — POST /api/v1/grocery-lists/{id}/generate?from=&to=.
+//   clear_checked_groceries — POST /api/v1/grocery-lists/{id}/clear-checked,
+//                           the manual "clear checked" action (Task 9 Slice 3).
 //   list_pantry         — GET /api/v1/pantry.
 //   add_pantry          — POST /api/v1/pantry.
 //   delete_pantry       — DELETE /api/v1/pantry/{id}.
+//   list_members         — GET /api/v1/members, the member registry the
+//                           frontend resolves ids against.
 //
 // The inbox commands were written in Task 1; the surfacing/task commands in
 // Task 3 for the Today view and its task-capture form; the meal/grocery/pantry
-// commands in P2 Slice 4 for the Menu and Groceries views. All share the same
+// commands in P2 Slice 4 for the Menu and Groceries views; list_members in
+// Task 9 Slice 2 for client-side member name resolution. All share the same
 // reqwest + serde shape and the small get_json / post_ok / post_json / patch_ok
 // / delete_ok helpers below.
 //
@@ -357,6 +362,17 @@ pub struct GenerateGroceriesResult {
     pub added: Vec<GroceryItem>,
 }
 
+/// Response envelope for `POST /api/v1/grocery-lists/{id}/clear-checked`,
+/// mirroring the `{ "removed": N }` body the endpoint returns (see
+/// amity-service's api/grocery.rs "clear-checked endpoint's contract" doc
+/// comment). Kept as its own tiny struct — not reused for anything else — so
+/// a future response-shape change there does not ripple into unrelated code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClearCheckedResponse {
+    /// How many checked items were deleted (0 when nothing was checked).
+    removed: u64,
+}
+
 /// A pantry staple, mirroring `PantryItemResponse` in amity-service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PantryItem {
@@ -373,6 +389,28 @@ struct CreatePantryItemBody {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+}
+
+// ─── Member types ───────────────────────────────────────────────────────────
+
+/// A household member, mirroring `MemberResponse` in amity-service.
+///
+/// The frontend fetches the whole roster once and resolves person ids (task
+/// assignees, meal cooks) against it locally — see api.ts's shared members
+/// store. A dangling id (no matching row, e.g. old seed data) is rendered as
+/// "—" by the frontend, never treated as an error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Member {
+    pub id: String,
+    pub display_name: String,
+    /// Optional short label; absent when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial: Option<String>,
+    /// Optional accent colour (`snake_case` string, e.g. `"sage"`); absent
+    /// when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    pub created_at: String,
 }
 
 // ─── HTTP helpers ───────────────────────────────────────────────────────────
@@ -810,6 +848,28 @@ async fn generate_groceries(
     post_no_body(url).await
 }
 
+/// Bulk-remove every checked item on a list
+/// (`POST /api/v1/grocery-lists/{id}/clear-checked`) — the manual "clear
+/// checked" action (Task 9 Slice 3). See amity-service's api/grocery.rs
+/// "clear-checked endpoint's contract" doc comment for why this exists: a
+/// checked (bought) item left on the list would otherwise block its own
+/// re-addition by a later `generate_groceries` call. Not `pub` and not
+/// wired to any timer — this only ever runs when the frontend's two-tap
+/// confirm completes, matching the brief's "manual only".
+///
+/// Returns the number of items removed.
+///
+/// # Errors
+///
+/// Returns a message on transport failure, a non-2xx status, or an unparsable
+/// response.
+#[tauri::command]
+async fn clear_checked_groceries(list_id: String) -> Result<u64, String> {
+    let url = format!("{SERVICE_BASE_URL}/api/v1/grocery-lists/{list_id}/clear-checked");
+    let resp: ClearCheckedResponse = post_no_body(url).await?;
+    Ok(resp.removed)
+}
+
 // ─── Pantry commands ────────────────────────────────────────────────────────
 
 /// List every pantry staple (`GET /api/v1/pantry`).
@@ -846,6 +906,30 @@ async fn delete_pantry(id: String) -> Result<(), String> {
     delete_ok(format!("{SERVICE_BASE_URL}/api/v1/pantry/{id}")).await
 }
 
+// ─── Member commands ────────────────────────────────────────────────────────
+
+/// List every registered member (`GET /api/v1/members`).
+///
+/// Called once by the frontend's shared members resource (see api.ts /
+/// members.ts); the hub resolves person ids (task assignees, meal cooks)
+/// against this list locally rather than the service inlining names.
+///
+/// # Errors
+///
+/// Returns a message the frontend can display if the service is unreachable.
+#[tauri::command]
+async fn list_members() -> Result<Vec<Member>, String> {
+    // The service wraps the list in a `{ "members": [...] }` envelope
+    // (matching list_calendars_handler); unwrap it here so the frontend gets
+    // a bare array, like list_pantry.
+    #[derive(Deserialize)]
+    struct MembersEnvelope {
+        members: Vec<Member>,
+    }
+    let envelope: MembersEnvelope = get_json(format!("{SERVICE_BASE_URL}/api/v1/members")).await?;
+    Ok(envelope.members)
+}
+
 // ─── Application entry ────────────────────────────────────────────────────────
 
 /// Build and run the Tauri application.
@@ -872,9 +956,11 @@ pub fn run() {
             check_grocery_item,
             delete_grocery_item,
             generate_groceries,
+            clear_checked_groceries,
             list_pantry,
             add_pantry,
             delete_pantry,
+            list_members,
         ])
         // Kiosk mode: when AMITY_KIOSK=1 (set by scripts/run-hub.sh), start the
         // window fullscreen for the wall-mounted hub. Default (unset/other) is a

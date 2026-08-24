@@ -47,6 +47,12 @@ pub struct AppState {
 ///
 /// The `TraceLayer` wraps every request in a tracing span, which gives
 /// structured logs (method, path, status, latency) with zero handler boilerplate.
+// This is a flat list of `.route(...)` registrations, one per endpoint — the
+// length is inherent to wiring every route in one place (mirrors the
+// `#[allow(clippy::too_many_lines)]` precedent on api/event.rs::create_event
+// and api/task.rs's two long handlers) rather than a sign the function should
+// be split; splitting it would just move the same list into a helper.
+#[allow(clippy::too_many_lines)]
 pub fn build_app(db: SqlitePool) -> Router {
     // P2 Slice 3 adds three route groups below the calendar block: meals,
     // grocery lists/items, and pantry. Each module documents its own
@@ -193,6 +199,13 @@ pub fn build_app(db: SqlitePool) -> Router {
             "/api/v1/grocery-lists/{id}/generate",
             post(api::grocery::generate_grocery_items),
         )
+        // Manual "clear checked" action (Task 9 Slice 3) — bulk-remove every
+        // checked item so a later generate can legitimately re-add it — see
+        // api/grocery.rs's "clear-checked endpoint's contract" doc comment.
+        .route(
+            "/api/v1/grocery-lists/{id}/clear-checked",
+            post(api::grocery::clear_checked_grocery_items),
+        )
         // Grocery item endpoints — a flat `/grocery-items/{id}` namespace
         // (not nested under a list) since these two actions only need the
         // item's own id.
@@ -220,9 +233,22 @@ pub fn build_app(db: SqlitePool) -> Router {
             "/api/v1/pantry/{id}",
             axum::routing::delete(api::pantry::delete_pantry_item_handler),
         )
+        // Member endpoints — the household's display registry (name, initial,
+        // colour only; see amity_core::member's module doc for the boundary).
+        // Register a new member.
+        .route("/api/v1/members", post(api::member::create_member))
+        // List every member, wrapped in a `{ members: [...] }` envelope.
+        .route("/api/v1/members", get(api::member::list_members_handler))
+        // Fetch a single member by id.
+        .route("/api/v1/members/{id}", get(api::member::get_member))
+        // Remove a member; there is no update path in this slice.
+        .route(
+            "/api/v1/members/{id}",
+            axum::routing::delete(api::member::delete_member_handler),
+        )
         // Attach tracing middleware so every request is logged automatically.
         // `TraceLayer` produces structured spans (method, path, status, latency)
-        // for every route registered above, meals/groceries/pantry included.
+        // for every route registered above, meals/groceries/pantry/members included.
         .layer(TraceLayer::new_for_http())
         // Inject shared state into all handlers via axum's `State<AppState>` extractor.
         // Every handler that declares `State(state): State<AppState>` receives a clone.

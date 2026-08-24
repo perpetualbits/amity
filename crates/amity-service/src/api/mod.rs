@@ -42,12 +42,17 @@
 //   POST  /api/v1/pantry                            — record a new staple
 //   GET   /api/v1/pantry                            — list pantry staples
 //   DELETE /api/v1/pantry/{id}                      — remove a staple
+//   POST  /api/v1/members                           — register a new member
+//   GET   /api/v1/members                           — list members
+//   GET   /api/v1/members/{id}                      — fetch a member
+//   DELETE /api/v1/members/{id}                     — remove a member
 
 pub mod calendar;
 pub mod event;
 pub mod grocery;
 pub mod inbox;
 pub mod meal;
+pub mod member;
 pub mod pantry;
 pub mod surfacing;
 pub mod task;

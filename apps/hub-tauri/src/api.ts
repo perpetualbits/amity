@@ -157,6 +157,19 @@ export interface AddPantryInput {
   note?: string;
 }
 
+/** A registered household member, as returned by the member commands.
+ * Mirrors `MemberResponse` in amity-service. */
+export interface Member {
+  id: string;
+  display_name: string;
+  /** Optional short label (e.g. a single letter); absent when unset. */
+  initial?: string;
+  /** Optional accent colour: "sage" | "clay" | "ochre" | "slate" | "plum" |
+   * "teal"; absent when unset. */
+  color?: string;
+  created_at: string;
+}
+
 // ─── Inbox ──────────────────────────────────────────────────────────────────
 
 /** Capture a free-text inbox item; returns the created item. */
@@ -268,6 +281,15 @@ export function generateGroceries(
   });
 }
 
+/** Bulk-remove every checked item on a list — the manual "clear checked"
+ * action (Task 9 Slice 3). A checked (bought) item left on the list would
+ * otherwise block its own re-addition by a later `generateGroceries` call;
+ * this is how the household resets that. Returns the number of items
+ * removed. Manual only — nothing in the hub calls this automatically. */
+export function clearCheckedGroceries(listId: string): Promise<number> {
+  return invoke<number>("clear_checked_groceries", { listId });
+}
+
 // ─── Pantry ─────────────────────────────────────────────────────────────────
 
 /** List every pantry staple. */
@@ -285,10 +307,16 @@ export function deletePantry(id: string): Promise<void> {
   return invoke<void>("delete_pantry", { id });
 }
 
-// ─── Shared helpers ─────────────────────────────────────────────────────────
+// ─── Members ────────────────────────────────────────────────────────────────
 
-/** The placeholder member UUID (migration 0001) — the only member for now. */
-export const PLACEHOLDER_MEMBER = "00000000-0000-7000-8000-000000000001";
+/** List every registered member. Views resolve ids against this list
+ * client-side rather than the service inlining names — see `./members.ts`
+ * for the shared, fetch-once resource built on top of this call. */
+export function listMembers(): Promise<Member[]> {
+  return invoke<Member[]>("list_members");
+}
+
+// ─── Shared helpers ─────────────────────────────────────────────────────────
 
 /**
  * Format an RFC 3339 instant for display: "10:42" when it falls today,

@@ -43,14 +43,16 @@ fi
 echo "building amity-service ..."
 cargo build -p amity-service
 
-# Start the service in its own process group so we can stop exactly it (and any
-# child) on exit — never anything else. Capture its PID.
+# Start the built binary directly as a background child and capture its exact
+# PID. (Do NOT use `setsid` here: it puts the service in a NEW process group, so
+# `kill -- -$!` would signal setsid's group, not the service's — which is exactly
+# how earlier temp services leaked. A direct child is killable by its own PID.)
 echo "starting a temporary service to seed the fresh database ..."
-setsid ./target/debug/amity-service >/tmp/amity-demo-reset.log 2>&1 &
-SERVICE_PGID=$!
+./target/debug/amity-service >/tmp/amity-demo-reset.log 2>&1 &
+SERVICE_PID=$!
 
-# Stop only the service group we started, whenever this script exits.
-cleanup() { kill -TERM -- -"$SERVICE_PGID" 2>/dev/null || kill "$SERVICE_PGID" 2>/dev/null || true; }
+# Stop exactly the service we started, by its PID, and WAIT for it to exit.
+cleanup() { kill "$SERVICE_PID" 2>/dev/null || true; wait "$SERVICE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 
 # Wait up to ~30s for the service to accept connections on 7890.

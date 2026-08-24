@@ -8,6 +8,7 @@
 //   GET    /api/v1/grocery-lists/{id}/items         — list a list's items
 //   POST   /api/v1/grocery-lists/{id}/generate      — generate additions from
 //                                                      planned meals
+//   POST   /api/v1/grocery-lists/{id}/clear-checked — bulk-remove checked items
 //   PATCH  /api/v1/grocery-items/{id}               — toggle checked
 //   DELETE /api/v1/grocery-items/{id}               — remove an item
 //
@@ -41,6 +42,21 @@
 //
 // There is no PATCH for a whole list (renaming, etc) — only items are
 // mutable via PATCH — matching the brief's fixed scope for this slice.
+//
+// ── The clear-checked endpoint's contract (Task 9 Slice 3) ─────────────────
+//
+// With one rolling grocery list, a checked-off (bought) item still sitting on
+// the list blocks its own re-addition by a later `/generate` call — the
+// no-clobber rule above sees it in `existing` and leaves it alone forever.
+// `POST /api/v1/grocery-lists/{id}/clear-checked` is the manual escape hatch:
+// it deletes every checked item on the list in one bulk statement (see
+// `amity_storage::grocery::delete_checked_grocery_items`'s doc comment) and
+// returns just the removed count, `{ "removed": N }` — mirroring `generate`'s
+// "return the delta, not the full list" convention, since the caller already
+// knows which item(s) it just checked and re-fetches the list to see the
+// rest. This is manual-only by design: there is no scheduled or automatic
+// call site anywhere in the codebase, because the household owns when the
+// list resets, not a timer.
 //
 // ── Response shape conventions ───────────────────────────────────────────
 //
@@ -87,8 +103,9 @@ use amity_core::ids::{GroceryItemId, GroceryListId};
 // Storage.
 // The grocery repository functions this module calls directly.
 use amity_storage::grocery::{
-    delete_grocery_item, fetch_grocery_list, insert_grocery_item, insert_grocery_items,
-    insert_grocery_list, list_grocery_items, list_grocery_lists, set_grocery_item_checked,
+    delete_checked_grocery_items, delete_grocery_item, fetch_grocery_list, insert_grocery_item,
+    insert_grocery_items, insert_grocery_list, list_grocery_items, list_grocery_lists,
+    set_grocery_item_checked,
 };
 // The generate endpoint's two other inputs: meals in range, and the pantry.
 use amity_storage::meal::list_meals_in_range;
@@ -590,6 +607,51 @@ pub async fn generate_grocery_items(
         added: additions.iter().map(grocery_item_to_response).collect(),
     };
     Json(body).into_response()
+}
+
+// ─── Handler: clear checked ─────────────────────────────────────────────────
+
+/// `POST /api/v1/grocery-lists/{id}/clear-checked` — bulk-remove every
+/// checked item on a list (Task 9 Slice 3's manual "clear checked" action).
+///
+/// See this module's top-level doc comment ("The clear-checked endpoint's
+/// contract") for why this exists and why the response carries only a count.
+///
+/// Returns 400 for a malformed list id, 404 if the list is missing, 500 for
+/// an unexpected storage error, 200 with `{ "removed": N }` otherwise.
+pub async fn clear_checked_grocery_items(
+    State(state): State<AppState>,
+    Path(list_id_str): Path<String>,
+) -> impl IntoResponse {
+    // A non-UUID path parameter is a client error — reject before any DB access.
+    let Ok(list_id) = list_id_str.parse::<GroceryListId>() else {
+        return bad_request("invalid grocery list ID");
+    };
+
+    // The list must exist — mirrors `generate_grocery_items`'s and
+    // `list_grocery_items_handler`'s existence check, so an unknown list id
+    // is a 404 here too rather than a silent "removed": 0.
+    match fetch_grocery_list(&state.db, list_id).await {
+        // Exists: proceed.
+        Ok(Some(_)) => {}
+        // No such list → 404.
+        Ok(None) => return not_found("grocery list not found"),
+        // Storage failure → 500.
+        Err(e) => {
+            tracing::error!(error = %e, "failed to fetch grocery list for clear-checked");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    match delete_checked_grocery_items(&state.db, list_id).await {
+        // Success: report how many checked items were removed.
+        Ok(removed) => (StatusCode::OK, Json(json!({ "removed": removed }))).into_response(),
+        // Unexpected database error: log and 500.
+        Err(e) => {
+            tracing::error!(error = %e, "failed to clear checked grocery items");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
