@@ -25,13 +25,17 @@ cd "$REPO_ROOT"
 echo "building amity-service ..."
 cargo build -p amity-service
 
-# Start the service in the background and capture its exact PID.
+# Start the service in the background and capture its exact PID. Run the BUILT
+# BINARY directly, NOT `cargo run` — `cargo run`'s PID is cargo, whose service
+# child would be orphaned on the port when we kill cargo (that leftover is what
+# causes the next launch to fail with "address already in use").
 echo "starting amity-service on 127.0.0.1:7890 ..."
-cargo run -p amity-service &
+./target/debug/amity-service &
 SERVICE_PID=$!
 
-# Stop only the service we started, by its exact PID, whenever this script exits.
-cleanup() { kill "$SERVICE_PID" 2>/dev/null || true; }
+# Stop only the service we started, by its exact PID, and WAIT for it to exit so
+# the port is actually free by the time this script returns.
+cleanup() { kill "$SERVICE_PID" 2>/dev/null || true; wait "$SERVICE_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 
 # Wait up to ~30s for the service to accept TCP connections on 7890.
