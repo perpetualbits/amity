@@ -199,6 +199,13 @@ pub fn build_app(db: SqlitePool) -> Router {
             "/api/v1/grocery-lists/{id}/generate",
             post(api::grocery::generate_grocery_items),
         )
+        // Manual "clear checked" action (Task 9 Slice 3) — bulk-remove every
+        // checked item so a later generate can legitimately re-add it — see
+        // api/grocery.rs's "clear-checked endpoint's contract" doc comment.
+        .route(
+            "/api/v1/grocery-lists/{id}/clear-checked",
+            post(api::grocery::clear_checked_grocery_items),
+        )
         // Grocery item endpoints — a flat `/grocery-items/{id}` namespace
         // (not nested under a list) since these two actions only need the
         // item's own id.

@@ -16,6 +16,7 @@ import { createSignal, onMount, For, Show } from "solid-js";
 import {
   addGroceryItem,
   checkGroceryItem,
+  clearCheckedGroceries,
   createGroceryList,
   deleteGroceryItem,
   generateGroceries,
@@ -41,6 +42,15 @@ export default function Groceries() {
   const [busy, setBusy] = createSignal(false);
   // Whether the manual-add form is open.
   const [addOpen, setAddOpen] = createSignal(false);
+  // Whether "Clear checked" is showing its inline confirm affordance (first
+  // tap arms it; a second tap on "confirm" actually clears, "cancel" or
+  // tapping elsewhere reverts). No native confirm()/dialog — that blocks the
+  // Tauri webview (brief).
+  const [confirmingClear, setConfirmingClear] = createSignal(false);
+
+  /** How many items on the active list are currently checked — drives the
+   * "Clear checked" button's label, disabled state, and visibility. */
+  const checkedCount = () => items().filter((i) => i.checked).length;
 
   /** Resolve the household's single active grocery list: use the first
    * existing one, or create "Groceries" if none exists yet. */
@@ -110,6 +120,24 @@ export default function Groceries() {
     }
   }
 
+  /** Second tap of the "Clear checked" confirm: actually remove every
+   * checked item, then reload. This is the only path that mutates anything —
+   * the first tap only flips `confirmingClear` (see the button below). */
+  async function clearChecked() {
+    const id = listId();
+    if (!id) return;
+    setConfirmingClear(false);
+    setBusy(true);
+    try {
+      await clearCheckedGroceries(id);
+      await load();
+    } catch (err) {
+      setError(typeof err === "string" ? err : "could not clear checked items");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Group items by category, in first-seen order; uncategorised items form
    * their own (unlabelled) leading group. Degrades to a single flat group
    * when no item carries a category — the common case today, since neither
@@ -146,6 +174,44 @@ export default function Groceries() {
           >
             Generate from this week's menu
           </button>
+
+          <Show when={!loading() && checkedCount() > 0}>
+            <Show
+              when={!confirmingClear()}
+              fallback={
+                <div class="groceries-clear-confirm" role="group" aria-label="Confirm clear checked">
+                  <span class="groceries-clear-prompt">
+                    Clear {checkedCount()} checked?
+                  </span>
+                  <button
+                    class="groceries-clear-confirm-yes"
+                    type="button"
+                    disabled={busy()}
+                    onClick={clearChecked}
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    class="groceries-clear-confirm-no"
+                    type="button"
+                    disabled={busy()}
+                    onClick={() => setConfirmingClear(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              }
+            >
+              <button
+                class="groceries-clear"
+                type="button"
+                disabled={busy()}
+                onClick={() => setConfirmingClear(true)}
+              >
+                Clear {checkedCount()} checked
+              </button>
+            </Show>
+          </Show>
         </div>
 
         <Show when={error()}>

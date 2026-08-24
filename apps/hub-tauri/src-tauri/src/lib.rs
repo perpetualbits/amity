@@ -20,6 +20,8 @@
 //   check_grocery_item  — PATCH /api/v1/grocery-items/{id}, tap-to-check.
 //   delete_grocery_item — DELETE /api/v1/grocery-items/{id}.
 //   generate_groceries  — POST /api/v1/grocery-lists/{id}/generate?from=&to=.
+//   clear_checked_groceries — POST /api/v1/grocery-lists/{id}/clear-checked,
+//                           the manual "clear checked" action (Task 9 Slice 3).
 //   list_pantry         — GET /api/v1/pantry.
 //   add_pantry          — POST /api/v1/pantry.
 //   delete_pantry       — DELETE /api/v1/pantry/{id}.
@@ -358,6 +360,17 @@ pub struct GenerateGroceriesResult {
     pub to: String,
     /// The newly-added items (may be empty).
     pub added: Vec<GroceryItem>,
+}
+
+/// Response envelope for `POST /api/v1/grocery-lists/{id}/clear-checked`,
+/// mirroring the `{ "removed": N }` body the endpoint returns (see
+/// amity-service's api/grocery.rs "clear-checked endpoint's contract" doc
+/// comment). Kept as its own tiny struct — not reused for anything else — so
+/// a future response-shape change there does not ripple into unrelated code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClearCheckedResponse {
+    /// How many checked items were deleted (0 when nothing was checked).
+    removed: u64,
 }
 
 /// A pantry staple, mirroring `PantryItemResponse` in amity-service.
@@ -835,6 +848,28 @@ async fn generate_groceries(
     post_no_body(url).await
 }
 
+/// Bulk-remove every checked item on a list
+/// (`POST /api/v1/grocery-lists/{id}/clear-checked`) — the manual "clear
+/// checked" action (Task 9 Slice 3). See amity-service's api/grocery.rs
+/// "clear-checked endpoint's contract" doc comment for why this exists: a
+/// checked (bought) item left on the list would otherwise block its own
+/// re-addition by a later `generate_groceries` call. Not `pub` and not
+/// wired to any timer — this only ever runs when the frontend's two-tap
+/// confirm completes, matching the brief's "manual only".
+///
+/// Returns the number of items removed.
+///
+/// # Errors
+///
+/// Returns a message on transport failure, a non-2xx status, or an unparsable
+/// response.
+#[tauri::command]
+async fn clear_checked_groceries(list_id: String) -> Result<u64, String> {
+    let url = format!("{SERVICE_BASE_URL}/api/v1/grocery-lists/{list_id}/clear-checked");
+    let resp: ClearCheckedResponse = post_no_body(url).await?;
+    Ok(resp.removed)
+}
+
 // ─── Pantry commands ────────────────────────────────────────────────────────
 
 /// List every pantry staple (`GET /api/v1/pantry`).
@@ -921,6 +956,7 @@ pub fn run() {
             check_grocery_item,
             delete_grocery_item,
             generate_groceries,
+            clear_checked_groceries,
             list_pantry,
             add_pantry,
             delete_pantry,

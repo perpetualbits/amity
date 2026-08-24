@@ -281,6 +281,15 @@ export function generateGroceries(
   });
 }
 
+/** Bulk-remove every checked item on a list — the manual "clear checked"
+ * action (Task 9 Slice 3). A checked (bought) item left on the list would
+ * otherwise block its own re-addition by a later `generateGroceries` call;
+ * this is how the household resets that. Returns the number of items
+ * removed. Manual only — nothing in the hub calls this automatically. */
+export function clearCheckedGroceries(listId: string): Promise<number> {
+  return invoke<number>("clear_checked_groceries", { listId });
+}
+
 // ─── Pantry ─────────────────────────────────────────────────────────────────
 
 /** List every pantry staple. */

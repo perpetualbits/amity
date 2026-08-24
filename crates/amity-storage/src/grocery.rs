@@ -10,6 +10,8 @@
 //   • list_grocery_items        — read a list's items
 //   • set_grocery_item_checked  — toggle an item's checked flag
 //   • delete_grocery_item       — remove an item by id
+//   • delete_checked_grocery_items — bulk-remove every checked item on a
+//                                 list (the manual "clear checked" action)
 //
 // No business logic lives here; the pure generation logic
 // (`amity_core::grocery::plan_grocery_additions`) decides *what* to add —
@@ -287,6 +289,42 @@ pub async fn delete_grocery_item(
 
     // rows_affected() is 0 or 1 since id is the primary key.
     Ok(result.rows_affected() > 0)
+}
+
+/// Delete every checked item on a list — the storage half of the manual
+/// "clear checked" action (P2 Task 9 Slice 3).
+///
+/// This is deliberately bulk (one statement, not a fetch-then-delete loop):
+/// the caller (the `/clear-checked` endpoint) never needs the individual ids
+/// of what was removed, only the count, and a single `DELETE ... WHERE`
+/// avoids a read-then-write race against a concurrent check/uncheck. There is
+/// no automatic/scheduled call site for this function anywhere in the
+/// codebase — clearing is human-initiated only, matching the brief's "the
+/// humans own the list's lifecycle".
+///
+/// Returns the number of rows removed (0 when nothing was checked).
+///
+/// # Errors
+///
+/// Returns `StorageError::Database` on sqlx failure.
+pub async fn delete_checked_grocery_items(
+    pool: &SqlitePool,
+    list_id: GroceryListId,
+) -> Result<u64, StorageError> {
+    let list_id_str = list_id.to_string();
+
+    // Scoped to this list, and only rows currently checked — an unchecked
+    // item on the same list is untouched, matching `set_grocery_item_checked`
+    // and `delete_grocery_item`'s single-table, no-transaction style (grocery
+    // items have no child rows to cascade).
+    let result = sqlx::query("DELETE FROM grocery_items WHERE list_id = ?1 AND checked = 1")
+        // ?1 which list to clear within.
+        .bind(list_id_str)
+        .execute(pool)
+        .await?;
+
+    // rows_affected() is however many checked items existed, 0 included.
+    Ok(result.rows_affected())
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────

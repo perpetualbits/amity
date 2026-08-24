@@ -767,6 +767,10 @@ body {
 
 .groceries-toolbar {
   margin-bottom: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 .groceries-generate {
@@ -783,6 +787,75 @@ body {
 }
 
 .groceries-generate:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* "Clear checked" — armed state (first tap). Distinct from Generate so it
+ * never reads as the primary action; the destructive step is gated behind
+ * the inline confirm below rather than a blocking native dialog. */
+.groceries-clear {
+  font-family: inherit;
+  font-size: 1rem;
+  /* 60px minimum touch target (brief §12.4). */
+  min-height: 60px;
+  padding: 0 1.25rem;
+  border: 1px solid #c99;
+  border-radius: 0;
+  background: #fff;
+  color: #a33;
+  cursor: pointer;
+}
+
+.groceries-clear:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Second-tap confirm affordance — replaces the "Clear checked" button in
+ * place (no native confirm()/dialog: that blocks the Tauri webview). */
+.groceries-clear-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #c99;
+  background: #fff4f4;
+  padding: 0.25rem;
+}
+
+.groceries-clear-prompt {
+  font-size: 0.95rem;
+  color: #a33;
+  padding: 0 0.5rem;
+}
+
+.groceries-clear-confirm-yes,
+.groceries-clear-confirm-no {
+  font-family: inherit;
+  font-size: 1rem;
+  /* 60px minimum touch target (brief §12.4). */
+  min-height: 60px;
+  min-width: 60px;
+  padding: 0 1rem;
+  border: 1px solid #ccc;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.groceries-clear-confirm-yes {
+  background: #a33;
+  color: #fff;
+  border-color: #a33;
+}
+
+.groceries-clear-confirm-no {
+  background: #fff;
+  color: #555;
+}
+
+.groceries-clear-confirm-yes:disabled,
+.groceries-clear-confirm-no:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
